@@ -1,0 +1,30 @@
+﻿
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.2
+pydantic-settings==2.1.0
+mysql-connector-python==8.2.0
+SQLAlchemy==2.0.23
+faiss-cpu==1.13.2
+numpy==2.2.0
+librosa
+torch
+scipy==1.14.1
+python-dotenv==1.0.0
+librosa==0.10.2
+soundfile
+numpy
+scipy
+faster-whisper
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic-settings
+customtkinter          # Giao diện hiện đại, đẹp hơn Tkinter mặc định (rất khuyến khích dùng)
+requests               # Gọi API FastAPI
+Pillow                 # Xử lý ảnh (logo, icons)
+sounddevice            # Ghi âm giọng nói (khuyến nghị)
+scipy                  # Lưu file .wav
+numpy
+pyaudio                # Backup nếu cần (dùng với wave)
+pyinstaller            # Build ra .exe

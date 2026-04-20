@@ -1,0 +1,14 @@
+py -m PyInstaller --onedir --windowed --noconfirm `
+  --name run `
+  --add-data "assets;assets" `
+  --add-data "C:\Users\tbinh\AppData\Local\Programs\Python\Python311\Lib\site-packages\customtkinter;customtkinter" `
+  --add-data "C:\Users\tbinh\AppData\Local\Programs\Python\Python311\tcl\tcl8.6;_tcl_data" `
+  --add-data "C:\Users\tbinh\AppData\Local\Programs\Python\Python311\tcl\tk8.6;_tk_data" `
+  --hidden-import=customtkinter `
+  --hidden-import=tkinter `
+  --hidden-import=sounddevice `
+  --hidden-import=scipy `
+  --hidden-import=numpy `
+  --hidden-import=requests `
+  --clean `
+  main.py
