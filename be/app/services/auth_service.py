@@ -17,6 +17,11 @@ ACCESS_TOKEN_EXPIRE_HOURS = 24
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
+# bcrypt giới hạn cứng 72 bytes – helper để truncate an toàn
+def _safe_encode(password: str) -> str:
+    """Truncate password về tối đa 72 bytes (giới hạn của bcrypt)."""
+    return password.encode("utf-8")[:72].decode("utf-8", errors="ignore")
+
 
 class AuthService:
     def __init__(self, db: Session):
@@ -25,10 +30,10 @@ class AuthService:
     # -------- Password helpers --------
 
     def hash_password(self, password: str) -> str:
-        return pwd_context.hash(password)
+        return pwd_context.hash(_safe_encode(password))
 
     def verify_password(self, plain: str, hashed: str) -> bool:
-        return pwd_context.verify(plain, hashed)
+        return pwd_context.verify(_safe_encode(plain), hashed)
 
     # -------- User CRUD --------
 
@@ -42,7 +47,7 @@ class AuthService:
         user = User(
             email=email,
             hashed_password=self.hash_password(password),
-            full_name=full_name
+            full_name=full_name,
         )
         self.db.add(user)
         self.db.commit()
@@ -55,8 +60,10 @@ class AuthService:
     def authenticate(self, email: str, password: str) -> Optional[User]:
         user = self.get_user_by_email(email)
         if not user:
+            logger.warning(f"⚠️  Không tìm thấy user: {email}")
             return None
         if not self.verify_password(password, user.hashed_password):
+            logger.warning(f"⚠️  Sai mật khẩu cho user: {email}")
             return None
         return user
 
@@ -75,7 +82,7 @@ class AuthService:
         payload = {
             "sub": str(user.id),
             "email": user.email,
-            "exp": expire
+            "exp": expire,
         }
         return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 

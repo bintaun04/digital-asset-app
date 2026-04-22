@@ -4,6 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.core.database import create_tables, get_db 
 # Import routers
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from app.api.voice import router as voice_router, init_voice_services
 from app.api.auth import router as auth_router
 app = FastAPI()
@@ -77,7 +80,38 @@ async def health():
         "status": "healthy",
         "message": "Voice Biometric API is running"
     }
+def _make_json_safe(obj):
+    """
+    Đệ quy chuyển đổi object thành JSON-safe,
+    xử lý bytes không decode được bằng UTF-8.
+    """
+    if isinstance(obj, bytes):
+        try:
+            return obj.decode("utf-8")
+        except UnicodeDecodeError:
+            # Thay thế byte lỗi bằng ký tự placeholder
+            return obj.decode("utf-8", errors="replace")
+    elif isinstance(obj, dict):
+        return {k: _make_json_safe(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_make_json_safe(item) for item in obj]
+    return obj
 
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError
+):
+    """
+    Custom handler: tránh crash khi error details chứa binary data
+    không decode được bằng UTF-8.
+    """
+    safe_errors = _make_json_safe(exc.errors())
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": safe_errors},
+    )
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

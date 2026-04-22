@@ -1,5 +1,14 @@
 # backend/app/api/auth.py
-from fastapi import APIRouter, HTTPException, Depends, status
+"""
+Luồng:
+  1. POST /auth/register        – JSON  → tạo tài khoản
+  2. POST /voice/enroll         – form-data + file → lưu giọng nói
+  3. POST /auth/login           – form-data + file audio → password + voice
+  4. POST /auth/login-no-voice  – form-data → chỉ password (trước khi enroll)
+"""
+
+import logging
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from typing import Optional
@@ -7,25 +16,25 @@ from sqlalchemy.orm import Session
 
 from ..core.database import get_db
 from ..services.auth_service import AuthService
+from ..services.biometric_service import BiometricService
 
 router = APIRouter()
 security = HTTPBearer(auto_error=False)
+logger = logging.getLogger("AuthAPI")
 
-# ========================= Schemas =========================
+
+# ── Schemas ───────────────────────────────────────────────────────────────────
 
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     full_name: Optional[str] = ""
 
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
 class UserResponse(BaseModel):
     id: int
     email: str
     full_name: Optional[str] = ""
+    has_voice: bool = False
 
     class Config:
         from_attributes = True
@@ -38,140 +47,131 @@ class AuthResponse(BaseModel):
 class MessageResponse(BaseModel):
     message: str
 
-class MeResponse(BaseModel):
-    id: int
-    email: str
-    full_name: Optional[str] = ""
 
-# ========================= Dependency =========================
+# ── Dependency ────────────────────────────────────────────────────────────────
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     if not credentials:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Chưa đăng nhập",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    token = credentials.credentials
-    auth_service = AuthService(db)
-    user = auth_service.get_user_from_token(token)
+        raise HTTPException(status_code=401, detail="Chưa đăng nhập",
+                            headers={"WWW-Authenticate": "Bearer"})
+    user = AuthService(db).get_user_from_token(credentials.credentials)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token không hợp lệ hoặc đã hết hạn",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise HTTPException(status_code=401, detail="Token không hợp lệ hoặc đã hết hạn",
+                            headers={"WWW-Authenticate": "Bearer"})
     return user
 
-# ========================= Endpoints =========================
+def _build_user_response(user) -> UserResponse:
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name or "",
+        has_voice=user.voice_embedding is not None,
+    )
+
+
+# ── 1. REGISTER (JSON) ────────────────────────────────────────────────────────
 
 @router.post("/register", response_model=AuthResponse, status_code=201)
 async def register(body: RegisterRequest, db: Session = Depends(get_db)):
-    """
-    Đăng ký tài khoản mới.
-    - **email**: địa chỉ email hợp lệ, không trùng lặp
-    - **password**: mật khẩu tối thiểu 6 ký tự
-    - **full_name**: họ và tên (tùy chọn)
-    """
-    auth_service = AuthService(db)
-
-    if auth_service.get_user_by_email(body.email):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email đã được đăng ký"
-        )
-
+    svc = AuthService(db)
+    if svc.get_user_by_email(body.email):
+        raise HTTPException(400, "Email đã được đăng ký")
     if len(body.password) < 6:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Mật khẩu phải có ít nhất 6 ký tự"
-        )
+        raise HTTPException(400, "Mật khẩu phải có ít nhất 6 ký tự")
 
-    user = auth_service.create_user(
-        email=body.email,
-        password=body.password,
-        full_name=body.full_name
-    )
-    token = auth_service.create_token(user)
+    user = svc.create_user(email=body.email, password=body.password,
+                           full_name=body.full_name)
+    return AuthResponse(user=_build_user_response(user),
+                        access_token=svc.create_token(user))
 
-    return AuthResponse(
-        user=UserResponse(id=user.id, email=user.email, full_name=user.full_name),
-        access_token=token
-    )
 
+# ── 2. LOGIN CHỈ PASSWORD – form-data (dùng trước khi enroll voice) ──────────
+
+@router.post("/login-no-voice", response_model=AuthResponse)
+async def login_no_voice(
+    email: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """FE gửi: data={'email':..., 'password':...}  (KHÔNG phải json=)"""
+    user = AuthService(db).authenticate(email, password)
+    if not user:
+        raise HTTPException(401, "Email hoặc mật khẩu không đúng")
+    svc = AuthService(db)
+    return AuthResponse(user=_build_user_response(user),
+                        access_token=svc.create_token(user))
+
+
+# ── 3. LOGIN ĐẦY ĐỦ – form-data + file audio ─────────────────────────────────
 
 @router.post("/login", response_model=AuthResponse)
-async def login(body: LoginRequest, db: Session = Depends(get_db)):
+async def login(
+    email: str = Form(...),
+    password: str = Form(...),
+    file: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+):
     """
-    Đăng nhập bằng email và mật khẩu.
-    Trả về JWT token dùng cho các request sau.
+    FE gửi multipart/form-data:
+      data={'email':..., 'password':...}
+      files={'file': <audio.wav>}   (bắt buộc nếu user đã enroll)
     """
-    auth_service = AuthService(db)
-    user = auth_service.authenticate(body.email, body.password)
-
+    svc = AuthService(db)
+    user = svc.authenticate(email, password)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Email hoặc mật khẩu không đúng"
-        )
+        raise HTTPException(401, "Email hoặc mật khẩu không đúng")
 
-    token = auth_service.create_token(user)
+    # Nếu đã enroll voice → bắt buộc verify
+    if user.voice_embedding is not None:
+        if file is None:
+            raise HTTPException(
+                400,
+                "Tài khoản này yêu cầu xác thực giọng nói. Vui lòng ghi âm trước khi đăng nhập."
+            )
+        audio_bytes = await file.read()
+        try:
+            is_match, score = await BiometricService().verify_voice(user.id, audio_bytes)
+        except Exception as e:
+            logger.error(f"Lỗi verify voice login: {e}")
+            raise HTTPException(500, "Lỗi xử lý giọng nói")
 
-    return AuthResponse(
-        user=UserResponse(id=user.id, email=user.email, full_name=user.full_name),
-        access_token=token
-    )
+        if not is_match:
+            raise HTTPException(401, f"Giọng nói không khớp (score={score:.4f}). Vui lòng thử lại.")
+
+        logger.info(f"✅ Voice OK – {user.email} score={score:.4f}")
+
+    return AuthResponse(user=_build_user_response(user),
+                        access_token=svc.create_token(user))
 
 
-@router.get("/me", response_model=MeResponse)
+# ── 4. ME ─────────────────────────────────────────────────────────────────────
+
+@router.get("/me", response_model=UserResponse)
 async def get_me(current_user=Depends(get_current_user)):
-    """
-    Lấy thông tin người dùng hiện tại.
-    Yêu cầu Bearer token hợp lệ trong header.
-    """
-    return MeResponse(
-        id=current_user.id,
-        email=current_user.email,
-        full_name=current_user.full_name
-    )
+    return _build_user_response(current_user)
 
+
+# ── 5. LOGOUT ────────────────────────────────────────────────────────────────
 
 @router.post("/logout", response_model=MessageResponse)
 async def logout(current_user=Depends(get_current_user)):
-    """
-    Đăng xuất (phía client xóa token).
-    JWT là stateless nên server chỉ xác nhận token hợp lệ.
-    """
-    return MessageResponse(message=f"Đã đăng xuất tài khoản {current_user.email}")
+    return MessageResponse(message=f"Đã đăng xuất {current_user.email}")
 
+
+# ── 6. ĐỔI MẬT KHẨU ─────────────────────────────────────────────────────────
 
 @router.put("/change-password", response_model=MessageResponse)
 async def change_password(
-    old_password: str,
-    new_password: str,
+    old_password: str = Form(...),
+    new_password: str = Form(...),
     current_user=Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """
-    Đổi mật khẩu.
-    Yêu cầu mật khẩu cũ đúng và mật khẩu mới tối thiểu 6 ký tự.
-    """
     if len(new_password) < 6:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Mật khẩu mới phải có ít nhất 6 ký tự"
-        )
-
-    auth_service = AuthService(db)
-    success = auth_service.change_password(current_user, old_password, new_password)
-
-    if not success:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Mật khẩu cũ không đúng"
-        )
-
+        raise HTTPException(400, "Mật khẩu mới phải có ít nhất 6 ký tự")
+    if not AuthService(db).change_password(current_user, old_password, new_password):
+        raise HTTPException(400, "Mật khẩu cũ không đúng")
     return MessageResponse(message="Đổi mật khẩu thành công")

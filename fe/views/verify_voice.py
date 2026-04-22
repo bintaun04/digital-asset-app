@@ -5,7 +5,7 @@ from scipy.io.wavfile import write
 import tempfile
 import os
 from tkinter import messagebox
-
+import numpy as np
 from services.voice_api import verify_voice
 
 class VerifyVoiceView(ctk.CTkFrame):
@@ -44,7 +44,7 @@ class VerifyVoiceView(ctk.CTkFrame):
             self.update()
 
             fs = 16000
-            self.recording = sd.rec(int(5 * fs), samplerate=fs, channels=1, dtype='float32')
+            self.recording = sd.rec(int(5 * fs), samplerate=fs, channels=1, dtype='int16')
             sd.wait()
 
             self.file_path = tempfile.mktemp(suffix=".wav")
