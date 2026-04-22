@@ -8,27 +8,40 @@ from ..repository.user_repo import UserRepository
 logger = logging.getLogger("BiometricService")
 
 class BiometricService:
-    """
-    Xác thực giọng nói sử dụng MFCC + DFT
-    """
-
     def __init__(self):
         self.audio_service = AudioService()
-        self.voice_threshold = 0.80   # Độ khắt khe
+        self.voice_threshold = 0.80
 
-    async def enroll_voice(self, user_id: int, audio_bytes: bytes) -> bool:
-        """Đăng ký giọng nói"""
+    async def verify_voice(self, user_id: int, audio_bytes: bytes) -> tuple:
+        user = await UserRepository.get_by_id(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User không tồn tại")
+
+        if not user.voice_embedding:
+            raise HTTPException(status_code=404, detail="User chưa đăng ký giọng nói")
+
+        if not isinstance(user.voice_embedding, (bytes, bytearray)):
+            raise HTTPException(status_code=500, detail="Dữ liệu embedding không hợp lệ (không phải bytes)")
+
+        stored_vector = np.frombuffer(user.voice_embedding, dtype=np.float32)
+        if stored_vector.size == 0:
+            raise HTTPException(status_code=500, detail="Embedding rỗng")
+
+        logger.info(f"[Verify] user_id={user_id} | embedding_len={stored_vector.size} | threshold={self.voice_threshold}")
+
         try:
-            audio_np = await self.audio_service.process_audio(audio_bytes)
-            embedding = self.audio_service.extract_features(audio_np)
-
-            success = await UserRepository.update_voice_embedding(user_id, embedding.tobytes())
-            if success:
-                logger.info(f"✅ [MFCC+DFT] Đăng ký giọng nói user {user_id} thành công")
-            return success
+            is_match, score = self.audio_service.verify_voice(
+                stored_embedding=user.voice_embedding,
+                audio_bytes=audio_bytes,
+                threshold=self.voice_threshold
+            )
+            logger.info(f"[Verify] Score: {score:.4f} | Match: {is_match}")
+            return is_match, score
+        except ValueError as ve:
+            raise HTTPException(status_code=422, detail=str(ve))
         except Exception as e:
-            logger.error(f"Lỗi enroll voice user {user_id}: {e}")
-            return False
+            logger.exception("Lỗi verify voice")
+            raise HTTPException(status_code=503, detail="Lỗi xử lý giọng nói")
 
     async def verify_voice(self, user_id: int, audio_bytes: bytes) -> tuple:
         """Xác thực giọng nói"""

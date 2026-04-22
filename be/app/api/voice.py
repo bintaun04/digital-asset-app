@@ -133,53 +133,34 @@ async def enroll_voice(
 
 
 @router.post("/verify", response_model=VerifyResponse)
-async def verify_voice(request: Request):
-    """Xác thực giọng nói"""
+async def verify_voice(
+    user_id: int = Form(..., gt=0, description="User ID (số nguyên dương)"),
+    file: UploadFile = File(..., description="File audio (wav/flac/ogg/mp3)")
+):
     _check_services((biometric_service, "BiometricService"))
 
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Thiếu file audio")
+
+    audio_bytes = await file.read()
+    if not audio_bytes or len(audio_bytes) < 1024:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="File audio quá ngắn hoặc rỗng")
+
     try:
-        form = await request.form()
-
-        # FIX: Validate user_id đúng cách
-        raw_user_id = form.get("user_id")
-        uid = _parse_user_id(raw_user_id)
-
-        # Validate file
-        file = form.get("file")
-        if not file:
-            raise HTTPException(
-                status_code=400,
-                detail="Không tìm thấy file audio trong form data"
-            )
-
-        audio_bytes = await file.read()
-        if not audio_bytes:
-            raise HTTPException(
-                status_code=400,
-                detail="File audio rỗng"
-            )
-
-        is_match, score = await biometric_service.verify_voice(
-            str(uid),  # FIX: luôn truyền str, nhất quán với enroll
-            audio_bytes
-        )
-
-        return VerifyResponse(
-            user_id=str(uid),
-            is_verified=is_match,
-            similarity_score=float(score),
-            message="Xác thực thành công" if is_match else "Xác thực thất bại"
-        )
-
-    except HTTPException:
-        raise  # Re-raise HTTPException không wrap lại
+        is_match, score = await biometric_service.verify_voice(str(user_id), audio_bytes)
+    except HTTPException as he:
+        raise he
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(ve))
     except Exception as e:
-        print(f"VERIFY ERROR: {type(e).__name__}: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Lỗi xác thực: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Lỗi xử lý: {str(e)}")
 
+    return VerifyResponse(
+        user_id=str(user_id),
+        is_verified=is_match,
+        similarity_score=float(score),
+        message="Xác thực thành công" if is_match else "Xác thực thất bại"
+    )
 
 @router.post("/command")
 async def voice_command(
@@ -250,3 +231,13 @@ async def delete_voice(user_id: str = Form(...)):
         status_code=404,
         detail=f"Không tìm thấy giọng nói của user {uid}"
     )
+@router.get("/enroll/status")
+async def enroll_status(user_id: int = Form(..., gt=0)):
+    user = await UserRepository.get_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User không tồn tại")
+    return {
+        "user_id": user_id,
+        "enrolled": bool(user.voice_embedding),
+        "embedding_size": len(user.voice_embedding) if user.voice_embedding else 0
+    }
