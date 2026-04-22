@@ -1,114 +1,72 @@
-import sys
-import os
+# fe/main.py
 import customtkinter as ctk
 
 from views.home_guest import HomeGuest
+from views.home_user import HomeUserView
 from views.login import LoginView
 from views.register import RegisterView
-from views.voice_register import VoiceRegisterView
-from views.home_user import HomeUserView
 from views.verify_voice import VerifyVoiceView
+from views.voice_register import VoiceRegisterView
 
 
-# ==================== HỖ TRỢ CHẠY .EXE ====================
-def resource_path(relative_path):
-    """
-    Hỗ trợ đường dẫn khi:
-    - chạy Python bình thường
-    - chạy file .exe sau khi build bằng PyInstaller
-    """
-    try:
-        base_path = sys._MEIPASS  # PyInstaller temp folder
-    except Exception:
-        base_path = os.path.abspath(".")
-
-    return os.path.join(base_path, relative_path)
-
-
-# Ví dụ dùng logo nếu cần
-LOGO_PATH = resource_path("assets/images/logo.png")
-
-
-# ==================== CẤU HÌNH GIAO DIỆN ====================
-ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
-
-
-# ==================== APP CHÍNH ====================
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-
         self.title("Digital Asset App")
-        self.geometry("900x650")
-        self.minsize(900, 650)
+        self.geometry("480x620")
+        self.resizable(False, False)
 
-        # dữ liệu user sau login
+        # Trạng thái người dùng
         self.current_user = None
         self.token = None
 
-        # container chứa các frame
+        # Container chứa tất cả frame
         self.container = ctk.CTkFrame(self)
         self.container.pack(fill="both", expand=True)
-
         self.container.grid_rowconfigure(0, weight=1)
         self.container.grid_columnconfigure(0, weight=1)
 
+        # Khởi tạo tất cả frame
         self.frames = {}
+        frame_classes = {
+            "HomeGuest":        HomeGuest,
+            "HomeUserView":     HomeUserView,
+            "LoginView":        LoginView,
+            "RegisterView":     RegisterView,
+            "VerifyVoiceView":  VerifyVoiceView,
+            "VoiceRegisterView": VoiceRegisterView,
+        }
 
-        self.create_frames()
-        self.show_frame("HomeGuest")
-
-    def create_frames(self):
-        """
-        Tạo toàn bộ giao diện
-        """
-        pages = (
-            HomeGuest,
-            LoginView,
-            RegisterView,
-            VoiceRegisterView,
-            HomeUserView,
-            VerifyVoiceView,
-        )
-
-        for Page in pages:
-            frame = Page(parent=self.container, controller=self)
-            self.frames[Page.__name__] = frame
+        for name, FrameClass in frame_classes.items():
+            frame = FrameClass(self.container, self)
+            self.frames[name] = frame
             frame.grid(row=0, column=0, sticky="nsew")
 
-    def show_frame(self, page_name):
-        """
-        Hiển thị frame theo tên class
-        """
-        frame = self.frames.get(page_name)
+        self.show_frame("HomeGuest")
+
+    def show_frame(self, name: str):
+        """Hiển thị frame theo tên"""
+        frame = self.frames.get(name)
         if frame:
             frame.tkraise()
+        else:
+            print(f"[WARN] Không tìm thấy frame: {name}")
 
-    def login_success(self, user_data, token):
-        """
-        Gọi sau khi đăng nhập thành công
-        """
-        self.current_user = user_data
+    def login_success(self, user: dict, token: str):
+        """Gọi sau khi đăng nhập thành công"""
+        self.current_user = user
         self.token = token
-
-        # cập nhật giao diện nếu cần
-        home_user = self.frames.get("HomeUserView")
-        if home_user and hasattr(home_user, "refresh_user_info"):
-            home_user.refresh_user_info()
-
         self.show_frame("HomeUserView")
 
     def logout(self):
-        """
-        Đăng xuất
-        """
+        """Đăng xuất - xóa trạng thái và về trang chủ guest"""
         self.current_user = None
         self.token = None
         self.show_frame("HomeGuest")
 
 
-# ==================== RUN APP ====================
 if __name__ == "__main__":
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("blue")
     app = App()
     app.mainloop()

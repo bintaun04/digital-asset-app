@@ -7,7 +7,7 @@ import numpy as np
 from ..services.voice_service import VoiceService
 from ..services.biometric_service import BiometricService
 
-router = APIRouter(prefix="/voice", tags=["Voice"])
+router = APIRouter()
 
 # Global services
 voice_service: VoiceService = None

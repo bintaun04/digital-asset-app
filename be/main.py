@@ -2,11 +2,16 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-
+from app.core.database import create_tables, get_db 
 # Import routers
 from app.api.voice import router as voice_router, init_voice_services
-# from app.api.auth import router as auth_router    auth.py
+from app.api.auth import router as auth_router
+app = FastAPI()
 
+# Tạo tables khi startup
+create_tables()
+
+app.include_router(auth_router)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -55,7 +60,7 @@ app.add_middleware(
 
 # Đăng ký routers
 app.include_router(voice_router, prefix="/voice", tags=["Voice"])
-# app.include_router(auth_router, prefix="/auth", tags=["Auth"])   # Uncomment khi có auth
+app.include_router(auth_router, prefix="/auth", tags=["Auth"])   
 
 @app.get("/")
 async def root():
