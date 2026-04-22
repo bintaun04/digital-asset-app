@@ -1,25 +1,22 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request,Query,status
 from pydantic import BaseModel
 from typing import Optional
 import numpy as np
 
 from ..services.voice_service import VoiceService
 from ..services.biometric_service import BiometricService
-
+from ..repository.user_repo import UserRepository 
 router = APIRouter()
 
 # Global services
 voice_service: VoiceService = None
 biometric_service: BiometricService = None
 
-
 def init_voice_services(config: dict):
-    """Khởi tạo services - được gọi từ main.py"""
     global voice_service, biometric_service
     voice_service = VoiceService(config)
-    biometric_service = BiometricService()
-    print("✅ VoiceService & BiometricService (MFCC+DFT) đã khởi tạo thành công!")
-
+    biometric_service = BiometricService(voice_service)  # ← Inject STT service
+    print("✅ Services ready!")
 
 # ========================= Schemas =========================
 
@@ -32,6 +29,7 @@ class EnrollResponse(BaseModel):
     user_id: str
     status: str
     message: str
+    transcribed_text: str = ""
 
 
 class VerifyResponse(BaseModel):
@@ -41,8 +39,10 @@ class VerifyResponse(BaseModel):
     message: str
 
 
-class TranscribeResponse(BaseModel):
-    text: str
+class EnrollStatusResponse(BaseModel):
+    user_id: int
+    enrolled: bool
+    embedding_size: int
 
 
 class TestResponse(BaseModel):
@@ -50,6 +50,14 @@ class TestResponse(BaseModel):
     is_verified: bool
     similarity_score: float
     text: str
+
+
+class CommandResponse(BaseModel):
+    status: str
+    user_text: str
+    ai_response: str
+    score: Optional[float] = None
+    message: Optional[str] = None
 
 
 # ========================= Helpers =========================
@@ -61,8 +69,8 @@ def _parse_user_id(raw: Optional[str], field: str = "user_id") -> int:
     """
     if raw is None:
         raise HTTPException(
-            status_code=400,
-            detail=f"Thiếu trường '{field}' trong form data"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Thiếu trường '{field}' trong form data",
         )
     try:
         uid = int(raw)
@@ -71,12 +79,12 @@ def _parse_user_id(raw: Optional[str], field: str = "user_id") -> int:
         return uid
     except ValueError as e:
         raise HTTPException(
-            status_code=400,
-            detail=f"'{field}' không hợp lệ: {str(e)}"
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"'{field}' không hợp lệ: {str(e)}",
         )
 
 
-def _check_services(*services_with_names):
+def _check_services(*services_with_names: tuple) -> None:
     """
     Kiểm tra các service đã được khởi tạo chưa.
     Nhận list of (service, name) tuples.
@@ -84,160 +92,182 @@ def _check_services(*services_with_names):
     for service, name in services_with_names:
         if service is None:
             raise HTTPException(
-                status_code=500,
-                detail=f"{name} chưa được khởi tạo"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"{name} chưa được khởi tạo",
             )
+
+
+def _validate_audio(audio_bytes: bytes, min_size: int = 1024) -> None:
+    """Validate audio bytes - tái sử dụng ở nhiều endpoint"""
+    if not audio_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File audio rỗng",
+        )
+    if len(audio_bytes) < min_size:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"File audio quá ngắn (tối thiểu {min_size} bytes)",
+        )
 
 
 # ========================= Endpoints =========================
 
 @router.get("/health", response_model=HealthResponse)
-async def health():
-    return {
-        "status": "healthy",
-        "message": "Voice Biometric API (MFCC + DFT) is running"
-    }
+async def health() -> HealthResponse:
+    return HealthResponse(
+        status="healthy",
+        message="Voice Biometric API (MFCC + DFT) is running",
+    )
 
 
-@router.post("/enroll", response_model=EnrollResponse)
+@router.post("/enroll", response_model=EnrollResponse, status_code=201)
 async def enroll_voice(
     user_id: str = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
 ):
-    """Đăng ký giọng nói (MFCC + DFT)"""
     _check_services((biometric_service, "BiometricService"))
 
-    # Validate user_id
     uid = _parse_user_id(user_id)
 
-    # Validate file
     if not file.filename:
-        raise HTTPException(status_code=400, detail="File không hợp lệ")
+        raise HTTPException(400, "File không hợp lệ")
 
     audio_bytes = await file.read()
-    if not audio_bytes:
-        raise HTTPException(status_code=400, detail="File audio rỗng")
+    _validate_audio(audio_bytes)
 
-    success = await biometric_service.enroll_voice(str(uid), audio_bytes)
+    # Gọi enroll và nhận thêm transcribed_text
+    success, transcribed_text = await biometric_service.enroll_voice_with_stt(str(uid), audio_bytes)
 
     if success:
         return EnrollResponse(
             user_id=str(uid),
             status="success",
-            message="Đăng ký giọng nói thành công (MFCC + DFT)"
+            message="Đăng ký giọng nói thành công (Auto STT)",
+            transcribed_text=transcribed_text
         )
-    raise HTTPException(
-        status_code=500,
-        detail="Không thể đăng ký giọng nói"
-    )
-
-
+    raise HTTPException(500, "Không thể đăng ký giọng nói")
 @router.post("/verify", response_model=VerifyResponse)
 async def verify_voice(
-    user_id: int = Form(..., gt=0, description="User ID (số nguyên dương)"),
-    file: UploadFile = File(..., description="File audio (wav/flac/ogg/mp3)")
-):
-    _check_services((biometric_service, "BiometricService"))
-
-    if not file.filename:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Thiếu file audio")
-
-    audio_bytes = await file.read()
-    if not audio_bytes or len(audio_bytes) < 1024:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="File audio quá ngắn hoặc rỗng")
-
-    try:
-        is_match, score = await biometric_service.verify_voice(str(user_id), audio_bytes)
-    except HTTPException as he:
-        raise he
-    except ValueError as ve:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(ve))
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Lỗi xử lý: {str(e)}")
-
-    return VerifyResponse(
-        user_id=str(user_id),
-        is_verified=is_match,
-        similarity_score=float(score),
-        message="Xác thực thành công" if is_match else "Xác thực thất bại"
-    )
-
-@router.post("/command")
-async def voice_command(
+    user_id: str = Form(...),
     file: UploadFile = File(...),
-    user_id: str = Form("1")
 ):
-    """Xử lý lệnh giọng nói - Chỉ chạy sau khi verify thành công"""
-    _check_services((voice_service, "VoiceService"))
+    _check_services((voice_service, "VoiceService"), (biometric_service, "BiometricService"))
+    uid = _parse_user_id(user_id)
+    
+    audio_bytes = await file.read()
+    _validate_audio(audio_bytes)
+    
+    # 1. STT
+    transcribed = await voice_service.transcribe(audio_bytes)
+    
+    # 2. Two-Factor verify
+    is_match, score, reason = await biometric_service.verify_voice(
+        str(uid), audio_bytes, transcribed
+    )
+    
+    return VerifyResponse(
+        user_id=str(uid),
+        is_verified=is_match,
+        similarity_score=score,
+        transcribed_text=transcribed,
+        message=reason or "Thành công" if is_match else f"Thất bại: {reason}",
+    )
+@router.post("/command", response_model=CommandResponse)
+async def voice_command(
+    file: UploadFile = File(..., description="File audio (wav/flac/ogg/mp3)"),
+    user_id: str = Form(..., description="User ID (số nguyên dương)"),
+) -> CommandResponse:
+    """
+    Xử lý lệnh giọng nói.
+    Endpoint này chỉ chạy STT - KHÔNG tự verify lại.
+    Caller phải đã verify trước khi gọi endpoint này.
+    """
+    # ← check cả 2 service vì logic bên trong cần cả 2
+    _check_services(
+        (voice_service, "VoiceService"),
+        (biometric_service, "BiometricService"),
+    )
 
     uid = _parse_user_id(user_id)
 
     audio_bytes = await file.read()
-    if not audio_bytes:
-        raise HTTPException(status_code=400, detail="File audio rỗng")
+    _validate_audio(audio_bytes)
 
-    result = await voice_service.process_full_command(audio_bytes, uid)
+    # Chỉ chạy STT, không verify lại
+    result = await voice_service.process_command_only(audio_bytes, uid)
     return result
 
 
 @router.post("/test", response_model=TestResponse)
 async def test_voice(
     user_id: str = Form(...),
-    file: UploadFile = File(...)
-):
-    """Test kết hợp: Verify + STT"""
+    file: UploadFile = File(...),
+) -> TestResponse:
+    """Test kết hợp: Verify + STT (verify chỉ chạy đúng 1 lần)"""
     _check_services(
         (biometric_service, "BiometricService"),
-        (voice_service, "VoiceService")
+        (voice_service, "VoiceService"),
     )
 
     uid = _parse_user_id(user_id)
 
     audio_bytes = await file.read()
-    if not audio_bytes:
-        raise HTTPException(status_code=400, detail="File audio rỗng")
+    _validate_audio(audio_bytes)
 
-    # Bước 1: Verify
+    # Bước 1: Verify (1 lần duy nhất)
     is_match, score = await biometric_service.verify_voice(str(uid), audio_bytes)
 
-    # Bước 2: Nếu thành công thì chạy STT
+    # Bước 2: STT chỉ khi verify thành công
     text = ""
     if is_match:
-        result = await voice_service.process_full_command(audio_bytes, uid)
+        # ← process_command_only: chỉ STT, KHÔNG verify lại
+        result = await voice_service.process_command_only(audio_bytes, uid)
         text = result.get("user_text", "")
 
     return TestResponse(
         user_id=str(uid),
         is_verified=is_match,
         similarity_score=float(score),
-        text=text
+        text=text,
     )
 
 
 @router.delete("/delete")
-async def delete_voice(user_id: str = Form(...)):
+async def delete_voice(
+    user_id: str = Form(..., description="User ID (số nguyên dương)"),
+):
     """Xóa giọng nói"""
     _check_services((biometric_service, "BiometricService"))
 
     uid = _parse_user_id(user_id)
     success = await biometric_service.delete_voice(str(uid))
 
-    if success:
-        return {
-            "status": "success",
-            "message": f"Đã xóa giọng nói của user {uid}"
-        }
-    raise HTTPException(
-        status_code=404,
-        detail=f"Không tìm thấy giọng nói của user {uid}"
-    )
-@router.get("/enroll/status")
-async def enroll_status(user_id: int = Form(..., gt=0)):
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Không tìm thấy giọng nói của user {uid}",
+        )
+
+    return {"status": "success", "message": f"Đã xóa giọng nói của user {uid}"}
+
+
+@router.get("/enroll/status", response_model=EnrollStatusResponse)
+async def enroll_status(
+    user_id: int = Query(..., gt=0, description="User ID"),  # ← Query đúng cho GET
+) -> EnrollStatusResponse:
+    """Kiểm tra trạng thái đăng ký giọng nói"""
+    _check_services((biometric_service, "BiometricService"))
+
     user = await UserRepository.get_by_id(user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User không tồn tại")
-    return {
-        "user_id": user_id,
-        "enrolled": bool(user.voice_embedding),
-        "embedding_size": len(user.voice_embedding) if user.voice_embedding else 0
-    }
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User không tồn tại",
+        )
+
+    return EnrollStatusResponse(
+        user_id=user_id,
+        enrolled=bool(user.voice_embedding),
+        embedding_size=len(user.voice_embedding) if user.voice_embedding else 0,
+    )

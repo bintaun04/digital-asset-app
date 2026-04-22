@@ -18,12 +18,12 @@ class WhisperEngine:
 
     def __init__(self, config: Optional[dict] = None):
         cfg = config or {
-            "model_size": "vinai/PhoWhisper-small",
+            "model_size": "vinai/PhoWhisper-medium",
             "device": "cpu",
             "compute_type": "int8",
             "language": "vi",
             "beam_size": 5,
-            "vad_filter": False
+            "vad_filter": True
         }
 
         self.model_size = cfg.get("model_size", "vinai/PhoWhisper-small")
@@ -31,7 +31,7 @@ class WhisperEngine:
         self.compute_type = cfg.get("compute_type", "int8")
         self.language = cfg.get("language", "vi")
         self.beam_size = cfg.get("beam_size", 5)
-        self.vad_filter = cfg.get("vad_filter", False)
+        self.vad_filter = cfg.get("vad_filter", True)
 
         logger.info(f"Đang tải Whisper model: {self.model_size} | Device: {self.device}")
 

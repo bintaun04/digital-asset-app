@@ -1,48 +1,77 @@
 # backend/app/engines/voice_engine.py
 import logging
+import os
+from typing import Dict, Optional
 import numpy as np
-from typing import Dict, Any
 
-from .stt.whisper_engine import WhisperEngine
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
-logger = logging.getLogger("VoiceEngine")
+from faster_whisper import WhisperModel
+
+logger = logging.getLogger(__name__)
 
 class VoiceEngine:
-    """
-    Voice Engine chính - Chỉ xử lý STT (Whisper) sau khi đã xác thực thành công
-    """
+    def __init__(self, config: Optional[dict] = None):
+        cfg = config or {
+            # 🔥 NÂNG CẤP LÊN MEDIUM (chính xác hơn SMALL rất nhiều)
+            "model_size": "vinai/PhoWhisper-medium", 
+            "device": "cpu",
+            "compute_type": "int8",
+            "language": "vi",         # 🔥 KHÓA TIẾNG VIỆT
+            "beam_size": 5,
+            "vad_filter": True        # 🔥 LỌC TẠP ÂM
+        }
 
-    def __init__(self, config: dict):
-        logger.info("Đang khởi tạo VoiceEngine...")
-        whisper_config = config.get("whisper", {})
-        self.stt = WhisperEngine(whisper_config)
-        logger.info("✅ VoiceEngine đã sẵn sàng.")
+        self.model_size = cfg.get("model_size", "vinai/PhoWhisper-small")
+        self.device = cfg.get("device", "cpu")
+        self.compute_type = cfg.get("compute_type", "int8")
+        self.language = cfg.get("language", "vi")
+        self.beam_size = cfg.get("beam_size", 5)
+        self.vad_filter = cfg.get("vad_filter", False)
 
-    def transcribe(self, audio_data: np.ndarray) -> str:
-        """Chuyển giọng nói thành văn bản"""
-        result = self.stt.transcribe(audio_data)
-        return result.get("text", "").strip()
+        logger.info(f"🧠 Loading Whisper Model: {self.model_size} | Device: {self.device}")
 
-    def process_voice_command(self, audio_data: np.ndarray) -> Dict[str, Any]:
-        """
-        Xử lý lệnh sau khi đã xác thực giọng nói thành công
-        """
         try:
-            text = self.transcribe(audio_data)
+            self.model = WhisperModel(
+                self.model_size,
+                device=self.device,
+                compute_type=self.compute_type,
+            )
+            logger.info("✅ Whisper Model Loaded!")
+        except Exception as e:
+            logger.error(f"❌ Load failed: {e}")
+            self.model = WhisperModel("small", device=self.device, compute_type=self.compute_type)
 
-            if not text:
-                return {"status": "error", "message": "Không nhận diện được lời nói"}
+    def transcribe(self, audio: np.ndarray) -> Dict:
+        """STT với Prompt Engineering để chống ảo giác"""
+        if len(audio) == 0:
+            return {"text": "", "error": "Audio empty"}
 
-            logger.info(f"[USER COMMAND] {text}")
+        try:
+            # 🔥 MẸO CHỐNG ẢO GIÁC: Dùng prompt ép format
+            # Nó sẽ ưu tiên tìm text sau chữ "Text:"
+            segments, info = self.model.transcribe(
+                audio,
+                language=self.language,
+                beam_size=self.beam_size,
+                vad_filter=self.vad_filter,
+                # 🔥 ÉP BUỘC PROMPT
+                initial_prompt="Text: " 
+            )
 
-            # TODO: Sau này sẽ gọi LLM để xử lý intent (check balance, transfer, etc.)
+            full_text = [segment.text.strip() for segment in segments if segment.text.strip()]
+            raw_text = " ".join(full_text)
+
+            # 🔥 LỌC BỎ PROMPT RA KHỎI KẾT QUẢ
+            if raw_text.startswith("Text:"):
+                raw_text = raw_text[5:].strip()
+
             return {
-                "status": "success",
-                "user_text": text,
-                "ai_response": f"Bạn vừa nói: '{text}'. Hệ thống đang xử lý lệnh...",
-                "action": "pending"
+                "text": raw_text,
+                "language": info.language,
+                "language_probability": round(getattr(info, 'language_probability', 0.0), 3),
             }
 
         except Exception as e:
-            logger.error(f"Lỗi xử lý voice command: {e}")
-            return {"status": "error", "message": str(e)}
+            logger.error(f"Error transcribe: {e}")
+            return {"text": "", "error": str(e)}
