@@ -1,126 +1,170 @@
 # backend/app/services/biometric_service.py
 import logging
 from difflib import SequenceMatcher
+
 import numpy as np
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 
 from .audio_service import AudioService
 from ..repository.user_repo import UserRepository
 
 logger = logging.getLogger("BiometricService")
 
-VOICE_THRESHOLD = 0.82
-TEXT_MATCH_THRESHOLD = 0.75
+# ── Threshold ─────────────────────────────────────────────────────────────────
+# Fused MFCC+GE2E (380-d): dùng 0.75
+# MFCC-only fallback (124-d): dùng 0.82 nhưng vẫn có thể bị bypass
+VOICE_THRESHOLD  = 0.75
+TEXT_THRESHOLD   = 0.60   # nới hơn để chịu giọng vùng miền
 
 
-def _text_similarity(a: str, b: str) -> float:
+def _text_sim(a: str, b: str) -> float:
     return SequenceMatcher(None, a.strip().lower(), b.strip().lower()).ratio()
 
 
-class BiometricService:
-    def __init__(self, voice_service=None):  # ← Inject VoiceService để dùng STT
-        self.audio_service = AudioService()
-        self.voice_service = voice_service
-        self.voice_threshold = VOICE_THRESHOLD
-        self.text_threshold = TEXT_MATCH_THRESHOLD
+# Từ điển vùng miền cơ bản — normalize trước khi so sánh text
+_DIALECT = {
+    "tui": "tôi", "hổng": "không", "hông": "không",
+    "mần": "làm", "chớ": "chứ", "thiệt": "thật",
+    "vô": "vào", "nghen": "nhé", "hen": "nhé",
+    "ổng": "ông", "bả": "bà", "nờ": "này",
+}
 
-    async def enroll_voice(self, user_id: str, audio_bytes: bytes) -> bool:
-        """Auto-STT → voice_key + embedding → SAVE"""
+
+def _normalize(text: str) -> str:
+    words = text.lower().split()
+    return " ".join(_DIALECT.get(w, w) for w in words)
+
+
+class BiometricService:
+    def __init__(self, voice_service=None):
+        self.audio_service   = AudioService()
+        self.voice_service   = voice_service
+        self.voice_threshold = VOICE_THRESHOLD
+        self.text_threshold  = TEXT_THRESHOLD
+
+    # ── Enroll ────────────────────────────────────────────────────────────────
+
+    async def enroll_voice_with_stt(
+        self, user_id: str, audio_bytes: bytes
+    ) -> tuple[bool, str]:
+        """
+        1. STT → lấy voice_key_text tự động
+        2. Extract fused embedding (MFCC + GE2E)
+        3. Lưu cả 2 vào DB
+        """
         uid = int(user_id)
 
-        # 1. STT để lấy voice_key_text tự động
         if not self.voice_service:
             raise ValueError("VoiceService chưa được inject")
-        
+
+        # 1. STT
         transcribed = await self.voice_service.transcribe(audio_bytes)
-        if not transcribed or len(transcribed.strip()) < 3:
+        voice_key   = _normalize(transcribed.strip()) if transcribed else ""
+
+        if len(voice_key) < 3:
             raise HTTPException(
                 status_code=422,
-                detail="Không nhận diện được lời nói rõ ràng (ít nhất 3 ký tự)"
+                detail="Không nhận diện được lời nói rõ ràng (cần ít nhất 3 ký tự)"
             )
-        
-        voice_key_text = transcribed.strip().lower()
-        logger.info(f"[Enroll] Auto-STT user {uid}: '{voice_key_text}'")
 
-        # 2. Trích xuất embedding
-        audio_np = await self.audio_service.process_audio(audio_bytes)
-        embedding = self.audio_service.extract_features(audio_np)
-        embedding_bytes = embedding.tobytes()
+        logger.info(f"[Enroll STT] User {uid} → '{voice_key}'")
 
-        # 3. Lưu vào DB
+        # 2. Extract fused embedding
+        audio_np  = await self.audio_service.process_audio(audio_bytes)
+        embedding = self.audio_service.extract_features(audio_np)   # (380,) hoặc (124,) fallback
+        emb_bytes = embedding.tobytes()
+
+        logger.info(
+            f"[Enroll] User {uid} | "
+            f"embedding_dim={len(embedding)} | "
+            f"{'MFCC+GE2E fused' if len(embedding) > 200 else 'MFCC-only fallback'}"
+        )
+
+        # 3. Lưu DB
         success = UserRepository.save_voice_enrollment(
             user_id=uid,
-            embedding=embedding_bytes,
-            voice_key_text=voice_key_text,
+            embedding=emb_bytes,
+            voice_key_text=voice_key,
         )
 
         if success:
-            logger.info(
-                f"✅ Enrolled user {uid} | "
-                f"key='{voice_key_text[:50]}...' | "
-                f"dim={len(embedding)}"
-            )
-        return success
+            logger.info(f"✅ Enrolled user {uid} | key='{voice_key[:60]}'")
+
+        return success, transcribed or ""
+
+    # ── Verify ────────────────────────────────────────────────────────────────
 
     async def verify_voice(
         self, user_id: str, audio_bytes: bytes, transcribed_text: str
     ) -> tuple[bool, float, str]:
-        """Two-Factor: text match + embedding match"""
-        uid = int(user_id)
+        """
+        Two-factor:
+          Factor 1 — Text: nội dung nói khớp voice_key_text không?
+          Factor 2 — Voice: embedding có khớp người đã enroll không?
+
+        Cả 2 phải pass mới return True.
+        """
+        uid  = int(user_id)
         user = UserRepository.get_by_id(uid)
-        
+
         if not user or not user.voice_embedding:
-            raise HTTPException(status_code=404, detail="User chưa đăng ký giọng nói")
-        
+            raise HTTPException(status_code=404,
+                                detail="User chưa đăng ký giọng nói")
+
         stored_vector = np.frombuffer(user.voice_embedding, dtype=np.float32)
-        voice_key = user.voice_key_text or ""
-        
+        voice_key     = user.voice_key_text or ""
+
         if not voice_key:
-            raise HTTPException(status_code=400, detail="Chưa có voice key")
+            raise HTTPException(status_code=400, detail="Chưa có voice key trong DB")
 
-        # Factor 1: Text match
-        text_sim = _text_similarity(transcribed_text, voice_key)
-        if text_sim < self.text_threshold:
-            return False, 0.0, f"Nội dung không khớp ({text_sim:.1%})"
+        if stored_vector.size == 0:
+            raise HTTPException(status_code=500, detail="Embedding rỗng trong DB")
 
-        # Factor 2: Voice embedding
-        is_match, score = self.audio_service.verify_voice(
-            user.voice_embedding, audio_bytes, self.voice_threshold
+        # ── Factor 1: Text match ──────────────────────────────────────────────
+        spoken_norm = _normalize(transcribed_text)
+        key_norm    = _normalize(voice_key)
+        text_sim    = _text_sim(spoken_norm, key_norm)
+
+        logger.info(
+            f"[Verify Text] user={uid} | "
+            f"spoken='{spoken_norm}' | key='{key_norm}' | sim={text_sim:.2f}"
         )
-        
-        fail_msg = "" if is_match else f"Giọng không khớp (score={score:.3f})"
-        return is_match, score, fail_msg
+
+        if text_sim < self.text_threshold:
+            return False, 0.0, (
+                f"Nội dung không khớp ({text_sim:.0%}) — "
+                f"hãy đọc đúng câu đã đăng ký"
+            )
+
+        # ── Factor 2: Voice embedding ─────────────────────────────────────────
+        try:
+            is_match, score = self.audio_service.verify_voice(
+                user.voice_embedding,
+                audio_bytes,
+                self.voice_threshold,
+            )
+        except ValueError as ve:
+            raise HTTPException(status_code=422, detail=str(ve))
+        except Exception as e:
+            logger.exception("Lỗi verify embedding")
+            raise HTTPException(status_code=503, detail="Lỗi xử lý giọng nói")
+
+        emb_dim = stored_vector.size
+        logger.info(
+            f"[Verify Voice] user={uid} | score={score:.4f} | "
+            f"match={is_match} | dim={emb_dim} | "
+            f"{'MFCC+GE2E' if emb_dim > 200 else 'MFCC-only'}"
+        )
+
+        if not is_match:
+            return False, score, (
+                f"Giọng nói không khớp (score={score:.3f}, "
+                f"cần ≥{self.voice_threshold})"
+            )
+
+        return True, score, ""
+
+    # ── Delete ────────────────────────────────────────────────────────────────
 
     async def delete_voice(self, user_id: str) -> bool:
         return UserRepository.delete_voice_enrollment(int(user_id))
-    
-    async def enroll_voice_with_stt(self, user_id: str, audio_bytes: bytes) -> tuple[bool, str]:
-        """Enroll + trả về transcribed text để debug"""
-        uid = int(user_id)
-
-        # 1. STT
-        transcribed = await self.voice_service.transcribe(audio_bytes)
-        voice_key_text = transcribed.strip().lower() if transcribed else ""
-
-        if len(voice_key_text) < 5:
-            logger.warning(f"[Enroll] STT quá ngắn: '{voice_key_text}'")
-            return False, transcribed or "Không nhận diện được"
-
-        logger.info(f"[Enroll STT] User {uid} → '{voice_key_text}'")
-
-        # 2. Extract embedding
-        audio_np = await self.audio_service.process_audio(audio_bytes)
-        embedding = self.audio_service.extract_features(audio_np)
-        embedding_bytes = embedding.tobytes()
-
-        # 3. Lưu vào DB - KHÔNG DÙNG AWAIT (vì repo đã là đồng bộ)
-        success = UserRepository.save_voice_enrollment(   # ← XÓA CHỮ "await"
-            user_id=uid,
-            embedding=embedding_bytes,
-            voice_key_text=voice_key_text,
-        )
-
-        if success:
-            logger.info(f"✅ Enrolled user {uid} | key='{voice_key_text[:60]}...'")
-        
-        return success, transcribed

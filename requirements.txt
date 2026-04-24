@@ -40,3 +40,4 @@ cryptography==42.0.5                # Cần cho pymysql SSL
  
 # Settings
 pydantic-settings==2.2.1            # Đọc .env (đã dùng trong config.py)
+resemblyzer

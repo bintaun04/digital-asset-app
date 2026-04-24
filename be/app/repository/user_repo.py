@@ -2,7 +2,7 @@
 import logging
 from sqlalchemy import select
 from app.core.database import SessionLocal
-from app.models.user import User
+from  app.models.user import User
 
 logger = logging.getLogger("UserRepository")
 
