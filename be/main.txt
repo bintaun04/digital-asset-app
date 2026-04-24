@@ -1,0 +1,61 @@
+# main.py
+
+import logging
+from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from contextlib import asynccontextmanager
+
+from app.core.database import create_tables
+from app.api.voice import router as voice_router, init_voice_services
+from app.api.auth import router as auth_router
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger("DigitalAssetVoice")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("🚀 Đang khởi tạo Voice & Biometric Services...")
+    
+    create_tables()  # ✅ NÊN ĐỂ Ở ĐÂY
+    
+    voice_config = {
+        "model_size": "medium",
+        "device": "cpu",
+        "compute_type": "int8",
+        "language": "vi",
+    }
+    
+    init_voice_services(voice_config)
+    
+    logger.info("✅ Voice & Biometric System đã sẵn sàng!")
+    yield
+
+
+app = FastAPI(
+    title="Digital Asset Voice Manager",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(voice_router, prefix="/voice", tags=["Voice"])
+app.include_router(auth_router, prefix="/auth", tags=["Auth"])
+
+
+@app.get("/")
+async def root():
+    return {"status": "ok"}

@@ -9,7 +9,7 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "mysql+pymysql://root:root@localhost:3306/digital_asset"
 )
-
+print("🔗 CONNECTING TO DATABASE:", DATABASE_URL)
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,

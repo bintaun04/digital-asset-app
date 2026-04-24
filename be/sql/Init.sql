@@ -1,5 +1,4 @@
-DROP DATABASE IF EXISTS digital_asset;
-
+DROP DATABASE digital_asset;
 CREATE DATABASE digital_asset
     CHARACTER SET utf8mb4
     COLLATE utf8mb4_unicode_ci;
@@ -13,11 +12,13 @@ CREATE TABLE users (
     full_name           VARCHAR(150) DEFAULT '',
     is_active           BOOLEAN DEFAULT TRUE,
 
+    -- Voice biometric
     voice_embedding     BLOB DEFAULT NULL,
     voice_key_text      TEXT DEFAULT NULL,
     voice_language      VARCHAR(2) DEFAULT 'vi',
     voice_registered_at TIMESTAMP NULL DEFAULT NULL,
 
+    -- Timestamps
     created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 

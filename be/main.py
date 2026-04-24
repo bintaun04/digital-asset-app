@@ -11,7 +11,6 @@ from app.api.voice import router as voice_router, init_voice_services
 from app.api.auth import router as auth_router
 app = FastAPI()
 
-# Tạo tables khi startup
 create_tables()
 
 app.include_router(auth_router)
@@ -36,15 +35,11 @@ async def lifespan(app: FastAPI):
         }
     }
     
-    # Khởi tạo VoiceService và BiometricService
     init_voice_services(voice_config)
     
     logger.info("✅ Voice & Biometric System đã sẵn sàng!")
     yield
-    # Code sau yield sẽ chạy khi app shutdown (nếu cần dọn dẹp)
 
-
-# Tạo FastAPI app
 app = FastAPI(
     title="Digital Asset Voice Manager",
     description="Quản lý tài sản số bằng giọng nói với MFCC + DFT + Whisper",
@@ -52,10 +47,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS - Cho phép FE Tkinter gọi API (dùng "*" trong dev, nên giới hạn sau)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],           # Thay bằng ["http://localhost", ...] khi production
+    allow_origins=["*"],           
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
