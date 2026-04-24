@@ -1,31 +1,27 @@
-from sqlalchemy import Column, Integer, String, LargeBinary, DateTime, Boolean, Text
-from sqlalchemy.ext.declarative import declarative_base
-from datetime import datetime
-
-Base = declarative_base()
+from sqlalchemy import Column, Integer, String, Boolean, TIMESTAMP, LargeBinary, Text
+from sqlalchemy.sql import func
+from app.core.database import Base
 
 
 class User(Base):
     __tablename__ = "users"
 
-    # ── Thông tin cơ bản ──────────────────────────────────────────────────────
-    id               = Column(Integer, primary_key=True, index=True)
-    email            = Column(String(100), unique=True, index=True, nullable=False)
-    full_name        = Column(String(100), default="")
-    hashed_password  = Column(String(255), nullable=False)
+    # Auth fields
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    email = Column(String(150), unique=True, nullable=False, index=True)
+    hashed_password = Column(String(255), nullable=False)
+    full_name = Column(String(150), default="")
+    is_active = Column(Boolean, default=True)
 
-    # ── Voice biometric ───────────────────────────────────────────────────────
-    # Câu STT nhận diện được lúc enroll — dùng để so sánh text khi login
-    voice_key_text   = Column(Text, nullable=True)
+    # Voice biometric fields
+    voice_embedding = Column(LargeBinary, nullable=True)  # BLOB
+    voice_key_text = Column(Text, nullable=True)  # TEXT
+    voice_language = Column(String(2), default="vi")  # VARCHAR(2)
+    voice_registered_at = Column(TIMESTAMP, nullable=True)  # TIMESTAMP
 
-    # Vector embedding (MFCC 124-d hoặc fused MFCC+GE2E 380-d, serialized bytes)
-    voice_embedding  = Column(LargeBinary, nullable=True)
-
-    # ── Meta ──────────────────────────────────────────────────────────────────
-    is_active        = Column(Boolean, default=True)
-    created_at       = Column(DateTime, default=datetime.utcnow)
-    updated_at       = Column(DateTime, default=datetime.utcnow,
-                              onupdate=datetime.utcnow)
+    # Timestamps
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
     def __repr__(self):
-        return f"<User id={self.id} email={self.email}>"
+        return f"<User(id={self.id}, email={self.email})>"

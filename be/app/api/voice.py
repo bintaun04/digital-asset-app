@@ -1,24 +1,23 @@
-# backend/app/api/voice.py
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query, status
 from pydantic import BaseModel
 from typing import Optional
 
-from ..services.voice_service import VoiceService
-from ..services.biometric_service import BiometricService
-from ..repository.user_repo import UserRepository
+from app.services.voice_service import VoiceService
+from app.services.biometric_service import BiometricService
+from app.repository.user_repo import UserRepository
 
 router = APIRouter()
 
-# Global services – khởi tạo từ main.py qua init_voice_services()
+# Global services
 voice_service: VoiceService = None
 biometric_service: BiometricService = None
 
 
 def init_voice_services(config: dict):
     global voice_service, biometric_service
-    voice_service     = VoiceService(config)
-    biometric_service = BiometricService(voice_service)   # ← inject STT
-    print("✅ Services ready!")
+    voice_service = VoiceService(config)
+    biometric_service = BiometricService(voice_service)
+    print("✅ Multi-language Voice Services ready!")
 
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
@@ -32,6 +31,7 @@ class EnrollResponse(BaseModel):
     status: str
     message: str
     transcribed_text: str = ""
+    language: str = ""
 
 class VerifyResponse(BaseModel):
     user_id: str
@@ -44,6 +44,7 @@ class EnrollStatusResponse(BaseModel):
     user_id: int
     enrolled: bool
     embedding_size: int
+    language: Optional[str] = None
 
 class TestResponse(BaseModel):
     user_id: str
@@ -88,21 +89,41 @@ def _validate_audio(audio_bytes: bytes, min_size: int = 1024):
         raise HTTPException(422, f"File audio quá ngắn (tối thiểu {min_size} bytes)")
 
 
+def _validate_language(lang: str) -> str:
+    """Validate và chuẩn hóa language code"""
+    lang = lang.lower().strip()
+    if lang not in ["vi", "en"]:
+        raise HTTPException(400, "Language phải là 'vi' hoặc 'en'")
+    return lang
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/health", response_model=HealthResponse)
 async def health():
-    return HealthResponse(status="healthy",
-                          message="Voice Biometric API (MFCC + DFT) is running")
+    return HealthResponse(
+        status="healthy",
+        message="Multi-language Voice Biometric API (VI/EN) is running"
+    )
 
 
 @router.post("/enroll", response_model=EnrollResponse, status_code=201)
 async def enroll_voice(
     user_id: str = Form(...),
     file: UploadFile = File(...),
+    language: str = Form(default="vi"),  # Mặc định tiếng Việt
 ):
+    """
+    Đăng ký giọng nói với hỗ trợ đa ngôn ngữ
+    
+    Args:
+        user_id: ID người dùng
+        file: File audio
+        language: Ngôn ngữ ('vi' hoặc 'en')
+    """
     _check_services((biometric_service, "BiometricService"))
     uid = _parse_user_id(user_id)
+    lang = _validate_language(language)
 
     if not file.filename:
         raise HTTPException(400, "File không hợp lệ")
@@ -111,17 +132,20 @@ async def enroll_voice(
     _validate_audio(audio_bytes)
 
     success, transcribed_text = await biometric_service.enroll_voice_with_stt(
-        str(uid), audio_bytes
+        str(uid), audio_bytes, language=lang
     )
 
     if not success:
         raise HTTPException(500, "Không thể đăng ký giọng nói")
 
+    lang_name = "Tiếng Việt" if lang == "vi" else "English"
+    
     return EnrollResponse(
         user_id=str(uid),
         status="success",
-        message="Đăng ký giọng nói thành công (Auto STT)",
+        message=f"Đăng ký giọng nói thành công ({lang_name})",
         transcribed_text=transcribed_text,
+        language=lang,
     )
 
 
@@ -129,20 +153,30 @@ async def enroll_voice(
 async def verify_voice(
     user_id: str = Form(...),
     file: UploadFile = File(...),
+    language: str = Form(default="vi"),
 ):
+    """
+    Xác thực giọng nói với ngôn ngữ được chỉ định
+    
+    Args:
+        user_id: ID người dùng
+        file: File audio
+        language: Ngôn ngữ ('vi' hoặc 'en')
+    """
     _check_services(
-        (voice_service,     "VoiceService"),
+        (voice_service, "VoiceService"),
         (biometric_service, "BiometricService"),
     )
     uid = _parse_user_id(user_id)
+    lang = _validate_language(language)
 
     audio_bytes = await file.read()
     _validate_audio(audio_bytes)
 
-    # 1. STT
-    transcribed = await voice_service.transcribe(audio_bytes)
+    # 1. STT với ngôn ngữ chỉ định
+    transcribed = await voice_service.transcribe(audio_bytes, language=lang)
 
-    # 2. Two-factor verify: text + embedding
+    # 2. Two-factor verify
     is_match, score, reason = await biometric_service.verify_voice(
         str(uid), audio_bytes, transcribed
     )
@@ -160,18 +194,29 @@ async def verify_voice(
 async def voice_command(
     file: UploadFile = File(...),
     user_id: str = Form(...),
+    language: str = Form(default="vi"),
 ):
-    """Chỉ chạy STT lệnh — KHÔNG verify lại (caller đã verify trước)."""
+    """
+    Xử lý lệnh giọng nói (sau khi đã verify)
+    
+    Args:
+        file: File audio
+        user_id: ID người dùng
+        language: Ngôn ngữ ('vi' hoặc 'en')
+    """
     _check_services(
-        (voice_service,     "VoiceService"),
+        (voice_service, "VoiceService"),
         (biometric_service, "BiometricService"),
     )
     uid = _parse_user_id(user_id)
+    lang = _validate_language(language)
 
     audio_bytes = await file.read()
     _validate_audio(audio_bytes)
 
-    result = await voice_service.process_command_only(audio_bytes, uid)
+    result = await voice_service.process_command_only(
+        audio_bytes, uid, language=lang
+    )
     return result
 
 
@@ -179,26 +224,35 @@ async def voice_command(
 async def test_voice(
     user_id: str = Form(...),
     file: UploadFile = File(...),
+    language: str = Form(default="vi"),
 ):
-    """Test: Verify (1 lần) → STT nếu pass."""
+    """
+    Test: Verify → STT nếu pass
+    
+    Args:
+        user_id: ID người dùng
+        file: File audio
+        language: Ngôn ngữ ('vi' hoặc 'en')
+    """
     _check_services(
-        (voice_service,     "VoiceService"),
+        (voice_service, "VoiceService"),
         (biometric_service, "BiometricService"),
     )
     uid = _parse_user_id(user_id)
+    lang = _validate_language(language)
 
     audio_bytes = await file.read()
     _validate_audio(audio_bytes)
 
-    # 1. STT trước (dùng chung cho cả verify lẫn command)
-    transcribed = await voice_service.transcribe(audio_bytes)
+    # 1. STT
+    transcribed = await voice_service.transcribe(audio_bytes, language=lang)
 
-    # 2. Verify 1 lần duy nhất, truyền đủ 3 args
+    # 2. Verify
     is_match, score, reason = await biometric_service.verify_voice(
         str(uid), audio_bytes, transcribed
     )
 
-    # 3. Nếu pass thì dùng lại transcribed, không chạy STT lần 2
+    # 3. Trả text nếu pass
     text = transcribed if is_match else ""
 
     return TestResponse(
@@ -211,6 +265,7 @@ async def test_voice(
 
 @router.delete("/delete")
 async def delete_voice(user_id: str = Form(...)):
+    """Xóa giọng nói đã đăng ký"""
     _check_services((biometric_service, "BiometricService"))
     uid = _parse_user_id(user_id)
 
@@ -223,6 +278,7 @@ async def delete_voice(user_id: str = Form(...)):
 
 @router.get("/enroll/status", response_model=EnrollStatusResponse)
 async def enroll_status(user_id: int = Query(..., gt=0)):
+    """Kiểm tra trạng thái đăng ký giọng nói"""
     _check_services((biometric_service, "BiometricService"))
 
     user = UserRepository.get_by_id(user_id)
@@ -233,4 +289,5 @@ async def enroll_status(user_id: int = Query(..., gt=0)):
         user_id=user_id,
         enrolled=bool(user.voice_embedding),
         embedding_size=len(user.voice_embedding) if user.voice_embedding else 0,
+        language=getattr(user, 'voice_language', None),  # Nếu DB có lưu
     )
