@@ -1,3 +1,4 @@
+# backend/app/services/biometric_service.py
 import logging
 from difflib import SequenceMatcher
 
@@ -6,156 +7,273 @@ from fastapi import HTTPException
 
 from .audio_service import AudioService
 from ..repository.user_repo import UserRepository
+from ..repository.insight_repo import InsightRepository
+from app.services.challenge_service import ChallengeService
 
 logger = logging.getLogger("BiometricService")
 
-# Thresholds
 VOICE_THRESHOLD = 0.75
-TEXT_THRESHOLD = 0.60
+TEXT_THRESHOLD  = 0.60
 
 
 def _text_sim(a: str, b: str) -> float:
-    """Tính độ tương đồng text (không normalize)"""
     return SequenceMatcher(None, a.strip().lower(), b.strip().lower()).ratio()
 
 
 class BiometricService:
     def __init__(self, voice_service=None):
-        self.audio_service = AudioService()
-        self.voice_service = voice_service
+        self.audio_service   = AudioService()
+        self.voice_service   = voice_service
         self.voice_threshold = VOICE_THRESHOLD
-        self.text_threshold = TEXT_THRESHOLD
+        self.text_threshold  = TEXT_THRESHOLD
 
     # ── Enroll ────────────────────────────────────────────────────────────────
 
     async def enroll_voice_with_stt(
-        self, 
-        user_id: str, 
+        self,
+        user_id: str,
         audio_bytes: bytes,
-        language: str = "vi"
+        language: str = "vi",
     ) -> tuple[bool, str]:
-        """
-        Đăng ký giọng nói với STT tự động
-        
-        Args:
-            user_id: ID người dùng
-            audio_bytes: Audio data
-            language: Ngôn ngữ ('vi' hoặc 'en')
-        """
+        """STT → embedding → lưu DB. Không lưu file audio."""
         uid = int(user_id)
 
         if not self.voice_service:
             raise ValueError("VoiceService chưa được inject")
 
-        # 1. STT
         transcribed = await self.voice_service.transcribe(audio_bytes, language=language)
-        voice_key = transcribed.strip() if transcribed else ""
+        voice_key   = transcribed.strip() if transcribed else ""
 
         if len(voice_key) < 3:
             raise HTTPException(
                 status_code=422,
-                detail="Không nhận diện được lời nói rõ ràng (cần ít nhất 3 ký tự)"
+                detail="Không nhận diện được lời nói rõ ràng (cần ít nhất 3 ký tự)",
             )
 
         logger.info(f"[Enroll STT] User {uid} | Lang: {language} | Text: '{voice_key}'")
 
-        # 2. Extract embedding
-        audio_np = await self.audio_service.process_audio(audio_bytes)
+        audio_np  = await self.audio_service.process_audio(audio_bytes)
         embedding = self.audio_service.extract_features(audio_np)
         emb_bytes = embedding.tobytes()
 
         logger.info(
-            f"[Enroll] User {uid} | embedding_dim={len(embedding)} | "
-            f"{'MFCC+GE2E fused' if len(embedding) > 200 else 'MFCC-only fallback'}"
+            f"[Enroll] User {uid} | dim={len(embedding)} | "
+            f"{'MFCC+GE2E' if len(embedding) > 200 else 'MFCC-only'}"
         )
 
-        # 3. Lưu DB (kèm language)
         success = UserRepository.save_voice_enrollment(
             user_id=uid,
             embedding=emb_bytes,
             voice_key_text=voice_key,
-            language=language  # Lưu ngôn ngữ đã đăng ký
+            language=language,
         )
 
+        # Lưu insight enroll (score=1.0 vì đây là lần đầu, không có gốc để so)
         if success:
+            InsightRepository.save(
+                user_id=uid,
+                action_type="enroll",
+                insight={
+                    "is_match":         True,
+                    "cosine_score":     1.0,
+                    "mfcc_score":       None,
+                    "ge2e_score":       None,
+                    "text_similarity":  1.0,
+                    "threshold":        self.voice_threshold,
+                    "gap_to_threshold": 1.0 - self.voice_threshold,
+                    "embedding_dim":    int(len(embedding)),
+                    "mode":             "MFCC+GE2E" if len(embedding) > 200 else "MFCC-only",
+                    "confidence":       "high",
+                },
+                language=language,
+                transcribed_text=voice_key,
+            )
             logger.info(f"✅ Enrolled user {uid} | lang={language} | key='{voice_key[:60]}'")
 
         return success, transcribed or ""
 
-    # ── Verify ────────────────────────────────────────────────────────────────
+    # ── Verify + Insight ──────────────────────────────────────────────────────
 
-    async def verify_voice(
-        self, 
-        user_id: str, 
-        audio_bytes: bytes, 
-        transcribed_text: str
-    ) -> tuple[bool, float, str]:
+    async def verify_voice_with_insight(
+        self,
+        user_id: str,
+        audio_bytes: bytes,
+        transcribed_text: str,
+        language: str = "vi",
+        action_type: str = "verify",
+    ) -> tuple[bool, float, str, dict]:
         """
-        Two-factor verification:
-          1. Text matching
-          2. Voice embedding matching
+        Two-factor verify và trả insight chi tiết.
+        Tự động lưu insight vào DB sau mỗi lần verify.
         """
-        uid = int(user_id)
+        uid  = int(user_id)
         user = UserRepository.get_by_id(uid)
 
         if not user or not user.voice_embedding:
-            raise HTTPException(
-                status_code=404,
-                detail="User chưa đăng ký giọng nói"
-            )
+            raise HTTPException(status_code=404, detail="User chưa đăng ký giọng nói")
 
-        stored_vector = np.frombuffer(user.voice_embedding, dtype=np.float32)
         voice_key = user.voice_key_text or ""
-
         if not voice_key:
             raise HTTPException(status_code=400, detail="Chưa có voice key trong DB")
 
-        if stored_vector.size == 0:
-            raise HTTPException(status_code=500, detail="Embedding rỗng trong DB")
-
-        # ── Factor 1: Text match ──────────────────────────────────────────────
+        # Factor 1: Text
         text_sim = _text_sim(transcribed_text, voice_key)
-
         logger.info(
-            f"[Verify Text] user={uid} | "
-            f"spoken='{transcribed_text}' | key='{voice_key}' | sim={text_sim:.2f}"
+            f"[Verify Text] user={uid} | spoken='{transcribed_text}' | "
+            f"key='{voice_key}' | sim={text_sim:.2f}"
         )
 
         if text_sim < self.text_threshold:
-            return False, 0.0, (
-                f"Nội dung không khớp ({text_sim:.0%}) — "
-                f"hãy đọc đúng câu đã đăng ký"
-            )
+            try:
+                audio_np = await self.audio_service.process_audio(audio_bytes)
+                acoustic = self.audio_service.extract_acoustic(audio_np)
+            except Exception:
+                acoustic = {}
 
-        # ── Factor 2: Voice embedding ─────────────────────────────────────────
+            fail_insight = {
+                "is_match":         False,
+                "cosine_score":     0.0,
+                "mfcc_score":       None,
+                "ge2e_score":       None,
+                "text_similarity":  round(text_sim, 4),
+                "threshold":        self.voice_threshold,
+                "gap_to_threshold": round(0.0 - self.voice_threshold, 4),
+                "embedding_dim":    int(np.frombuffer(user.voice_embedding, dtype=np.float32).size),
+                "mode":             "N/A",
+                "confidence":       "very_low",
+                **acoustic,
+            }
+            InsightRepository.save(uid, action_type, fail_insight, language, transcribed_text)
+            return False, 0.0, f"Nội dung không khớp ({text_sim:.0%})", fail_insight
+        # Factor 2: Voice embedding
         try:
-            is_match, score = self.audio_service.verify_voice(
-                user.voice_embedding,
-                audio_bytes,
-                self.voice_threshold,
+            insight_raw = self.audio_service.compute_insight(
+                user.voice_embedding, audio_bytes, self.voice_threshold
             )
         except ValueError as ve:
             raise HTTPException(status_code=422, detail=str(ve))
-        except Exception as e:
-            logger.exception("Lỗi verify embedding")
+        except Exception:
+            logger.exception("Lỗi compute insight")
             raise HTTPException(status_code=503, detail="Lỗi xử lý giọng nói")
 
-        emb_dim = stored_vector.size
+        insight_raw["text_similarity"] = round(text_sim, 4)
+
+        is_match = insight_raw["is_match"]
+        score    = insight_raw["cosine_score"]
+
         logger.info(
-            f"[Verify Voice] user={uid} | score={score:.4f} | "
-            f"match={is_match} | dim={emb_dim} | "
-            f"{'MFCC+GE2E' if emb_dim > 200 else 'MFCC-only'}"
+            f"[Insight] user={uid} | score={score:.4f} | text={text_sim:.2f} | "
+            f"mfcc={insight_raw.get('mfcc_score')} | ge2e={insight_raw.get('ge2e_score')} | "
+            f"conf={insight_raw.get('confidence')}"
         )
 
-        if not is_match:
-            return False, score, (
-                f"Giọng nói không khớp (score={score:.3f}, "
-                f"cần ≥{self.voice_threshold})"
-            )
+        # Lưu insight vào DB
+        InsightRepository.save(uid, action_type, insight_raw, language, transcribed_text)
 
-        return True, score, ""
+        reason = "" if is_match else (
+            f"Giọng nói không khớp (score={score:.3f}, cần ≥{self.voice_threshold})"
+        )
+        return is_match, score, reason, insight_raw
+
+    # backward-compat alias
+    async def verify_voice(
+        self,
+        user_id: str,
+        audio_bytes: bytes,
+        transcribed_text: str,
+        language: str = "vi",
+    ) -> tuple[bool, float, str]:
+        is_match, score, reason, _ = await self.verify_voice_with_insight(
+            user_id, audio_bytes, transcribed_text, language
+        )
+        return is_match, score, reason
 
     # ── Delete ────────────────────────────────────────────────────────────────
 
     async def delete_voice(self, user_id: str) -> bool:
         return UserRepository.delete_voice_enrollment(int(user_id))
+
+    # ── Challenge ─────────────────────────────────────────────────────────────
+
+    async def verify_with_challenge(
+        self,
+        user_id: int,
+        audio_bytes: bytes,
+        challenge_id: str,
+        language: str = "vi",
+    ) -> tuple[bool, float, str]:
+
+        challenge = ChallengeService.get_challenge(challenge_id, user_id)
+        if not challenge:
+            return False, 0.0, "Challenge không hợp lệ hoặc đã hết hạn (90 giây)"
+
+        try:
+            transcribed = await self.voice_service.transcribe(audio_bytes, language)
+            if not transcribed or len(transcribed.strip()) < 5:
+                ChallengeService.delete_challenge(challenge_id)
+                return False, 0.0, "Không nhận diện được giọng nói"
+        except Exception as e:
+            logger.error(f"STT Error: {e}")
+            ChallengeService.delete_challenge(challenge_id)
+            return False, 0.0, "Lỗi chuyển giọng nói thành văn bản"
+
+        text_score = SequenceMatcher(
+            None,
+            transcribed.lower().strip(),
+            challenge["text"].lower().strip(),
+        ).ratio()
+
+        if text_score < 0.82:
+            ChallengeService.delete_challenge(challenge_id)
+            # Lưu insight fail
+            try:
+                audio_np = await self.audio_service.process_audio(audio_bytes)
+                acoustic = self.audio_service.extract_acoustic(audio_np)
+            except Exception:
+                acoustic = {}
+
+            InsightRepository.save(
+                user_id=user_id,
+                action_type="challenge",
+                insight={
+                    "is_match":         False,
+                    "cosine_score":     0.0,
+                    "mfcc_score":       None,
+                    "ge2e_score":       None,
+                    "text_similarity":  round(text_score, 4),
+                    "threshold":        0.78,
+                    "gap_to_threshold": round(0.0 - 0.78, 4),
+                    "embedding_dim":    0,
+                    "mode":             "N/A",
+                    "confidence":       "very_low",
+                    **acoustic,
+                },
+                language=language,
+                transcribed_text=transcribed,
+            )
+            return False, text_score, f"Nội dung nói không khớp ({text_score:.1%})"
+        user = UserRepository.get_by_id(user_id)
+        if not user or not user.voice_embedding:
+            ChallengeService.delete_challenge(challenge_id)
+            return False, 0.0, "Người dùng chưa đăng ký giọng nói"
+
+        try:
+            insight_raw = self.audio_service.compute_insight(
+                stored_embedding=user.voice_embedding,
+                audio_bytes=audio_bytes,
+                threshold=0.78,
+            )
+        except Exception as e:
+            logger.error(f"Voice compare error: {e}")
+            ChallengeService.delete_challenge(challenge_id)
+            return False, 0.0, "Lỗi so sánh giọng nói"
+
+        insight_raw["text_similarity"] = round(text_score, 4)
+        ChallengeService.delete_challenge(challenge_id)
+
+        # Lưu insight challenge
+        InsightRepository.save(user_id, "challenge", insight_raw, language, transcribed)
+
+        if insight_raw["is_match"] and text_score >= 0.82:
+            return True, insight_raw["cosine_score"], "Xác thực thành công"
+        return False, insight_raw["cosine_score"], f"Giọng nói không khớp (score: {insight_raw['cosine_score']:.4f})"

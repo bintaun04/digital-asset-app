@@ -7,18 +7,22 @@ from views.login import LoginView
 from views.register import RegisterView
 from views.verify_voice import VerifyVoiceView
 from views.voice_register import VoiceRegisterView
-
+from views.challenge_voice_view import ChallengeVoiceView
+from views.insight_view import InsightView
 
 class App(ctk.CTk):
+    BACKEND_URL = "http://localhost:8000"     # Class attribute
+
     def __init__(self):
         super().__init__()
-        self.title("Digital Asset App")
-        self.geometry("480x620")
+        self.title("Digital Asset App - Voice Biometric")
+        self.geometry("500x680")
         self.resizable(False, False)
 
-        # Trạng thái người dùng
         self.current_user = None
         self.token = None
+
+
 
         # Container chứa tất cả frame
         self.container = ctk.CTkFrame(self)
@@ -35,13 +39,18 @@ class App(ctk.CTk):
             "RegisterView":     RegisterView,
             "VerifyVoiceView":  VerifyVoiceView,
             "VoiceRegisterView": VoiceRegisterView,
+            "ChallengeVoiceView": ChallengeVoiceView,
+            "InsightView":         InsightView,
         }
 
         for name, FrameClass in frame_classes.items():
-            frame = FrameClass(self.container, self)
-            self.frames[name] = frame
-            frame.grid(row=0, column=0, sticky="nsew")
-
+            try:
+                frame = FrameClass(self.container, self)
+                self.frames[name] = frame
+                frame.grid(row=0, column=0, sticky="nsew")
+                print(f"✅ Loaded: {name}")
+            except Exception as e:
+                print(f"❌ FAILED {name}: {e}")
         self.show_frame("HomeGuest")
 
     def show_frame(self, name: str):

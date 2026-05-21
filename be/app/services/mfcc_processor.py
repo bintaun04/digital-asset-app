@@ -1,13 +1,4 @@
 # backend/app/services/mfcc_processor.py
-"""
-Speaker Verification: MFCC (124-d) + Resemblyzer GE2E (256-d) → fused (380-d)
-
-Toàn bộ logic xử lý nằm trong file này — audio_service.py không cần đổi.
-
-Cài thêm: pip install resemblyzer
-Nếu chưa cài → tự động fallback MFCC 124-d (kém hơn).
-"""
-
 import logging
 import numpy as np
 from typing import Tuple
@@ -23,7 +14,6 @@ _encoder = None  # lazy-load, chỉ load 1 lần
 
 
 def _get_encoder():
-    """Load Resemblyzer VoiceEncoder 1 lần duy nhất."""
     global _encoder
     if _encoder is None:
         try:
@@ -33,30 +23,19 @@ def _get_encoder():
         except ImportError:
             logger.warning(
                 "⚠️  resemblyzer chưa cài → fallback MFCC 124-d\n"
-                "   Chạy: pip install resemblyzer"
             )
             _encoder = "fallback"
     return _encoder
 
 
 class MFCCProcessor:
-    """
-    Tự động chọn chế độ:
-      ✅ Có resemblyzer  → MFCC 124-d ++ GE2E 256-d → fused 380-d  (phân biệt người chính xác)
-      ⚠️  Không có       → MFCC 124-d                               (dễ bị bypass, chỉ tạm thời)
-    """
-
     def __init__(self, sample_rate: int = SAMPLE_RATE):
         self.sample_rate = sample_rate
 
     # ── API chính (audio_service.py gọi vào đây) ─────────────────────────────
 
     def extract_features(self, audio: np.ndarray) -> np.ndarray:
-        """
-        Trả về speaker embedding vector đã L2-normalize.
-        Shape: (380,) nếu có resemblyzer | (124,) nếu fallback.
-        """
-        mfcc_vec = self._extract_mfcc(audio)        # luôn tính MFCC
+        mfcc_vec = self._extract_mfcc(audio) 
 
         enc = _get_encoder()
         if enc == "fallback":
@@ -65,7 +44,6 @@ class MFCCProcessor:
 
         ge2e_vec = self._extract_ge2e(audio, enc)   # (256,) L2-normed
 
-        # Weighted concat — GE2E quan trọng hơn MFCC để phân biệt người
         fused = np.concatenate([
             mfcc_vec,           # 124-d  (vocal tract / cách phát âm)
             ge2e_vec * 2.0,     # 256-d  (voice identity sinh học) — weight 2x
@@ -77,7 +55,6 @@ class MFCCProcessor:
         return result
 
     def extract_mfcc(self, audio: np.ndarray) -> np.ndarray:
-        """Alias backward compat cho các chỗ gọi tên cũ."""
         return self.extract_features(audio)
 
     def compare(

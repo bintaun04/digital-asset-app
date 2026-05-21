@@ -13,7 +13,7 @@ class VoiceRegisterView(ctk.CTkFrame):
         super().__init__(parent)
         self.controller = controller
         self.file_path = None
-        self.selected_language = "vi"  # Mặc định tiếng Việt
+        self.selected_language = "vi"  
 
         # Title
         ctk.CTkLabel(
@@ -241,7 +241,7 @@ class VoiceRegisterView(ctk.CTkFrame):
                         else f"Voice registration failed:\n{str(e)}")
             messagebox.showerror(error_title, error_msg)
             
-            fail_msg = "Đăng ký thất bại – thử lại" if self.selected_language == "vi" else "Registration failed – try again"
+            fail_msg = "Đăng ký thất bại - thử lại" if self.selected_language == "vi" else "Registration failed – try again"
             self.status_label.configure(text=fail_msg, text_color="red")
         finally:
             save_text = "✅ Lưu giọng nói" if self.selected_language == "vi" else "✅ Save voice"

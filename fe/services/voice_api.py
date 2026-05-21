@@ -7,10 +7,10 @@ def enroll_voice(user_id: str, file_path: str, token: str = None, language: str 
     Đăng ký giọng nói với ngôn ngữ được chỉ định
     
     Args:
-        user_id: ID người dùng
-        file_path: Đường dẫn file audio
+        user_id
+        file_path: link file audio
         token: JWT token
-        language: Ngôn ngữ ('vi' hoặc 'en')
+        language: vi/en
     """
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     
@@ -18,7 +18,7 @@ def enroll_voice(user_id: str, file_path: str, token: str = None, language: str 
         files = {"file": ("voice.wav", f, "audio/wav")}
         data = {
             "user_id": str(user_id),
-            "language": language  # ✅ Gửi language
+            "language": language
         }
         
         response = requests.post(
@@ -40,10 +40,10 @@ def verify_voice(user_id: str, file_path: str, token: str = None, language: str 
     Xác thực giọng nói với ngôn ngữ được chỉ định
     
     Args:
-        user_id: ID người dùng
-        file_path: Đường dẫn file audio
+        user_id
+        file_path: link file audio
         token: JWT token
-        language: Ngôn ngữ ('vi' hoặc 'en')
+        language: vi/en
     """
     headers = {}
     if token:
@@ -53,7 +53,7 @@ def verify_voice(user_id: str, file_path: str, token: str = None, language: str 
         files = {"file": ("voice.wav", f, "audio/wav")}
         data = {
             "user_id": str(user_id),
-            "language": language  # ✅ Gửi language
+            "language": language 
         }
 
         response = requests.post(
