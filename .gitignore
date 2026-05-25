@@ -7,7 +7,6 @@ fe/run*/
 **/__pycache__/
 **/.venv/
 .env*
-models/
 cache/
 fe/dist/
 fe/run*
