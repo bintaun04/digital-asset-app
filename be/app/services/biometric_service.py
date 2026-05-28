@@ -12,7 +12,7 @@ from app.services.challenge_service import ChallengeService
 
 logger = logging.getLogger("BiometricService")
 
-VOICE_THRESHOLD = 0.75
+VOICE_THRESHOLD = 0.7
 TEXT_THRESHOLD  = 0.60
 
 
@@ -241,7 +241,7 @@ class BiometricService:
                     "mfcc_score":       None,
                     "ge2e_score":       None,
                     "text_similarity":  round(text_score, 4),
-                    "threshold":        0.78,
+                    "threshold":        0.7,
                     "gap_to_threshold": round(0.0 - 0.78, 4),
                     "embedding_dim":    0,
                     "mode":             "N/A",
@@ -261,7 +261,7 @@ class BiometricService:
             insight_raw = self.audio_service.compute_insight(
                 stored_embedding=user.voice_embedding,
                 audio_bytes=audio_bytes,
-                threshold=0.78,
+                threshold=0.7,
             )
         except Exception as e:
             logger.error(f"Voice compare error: {e}")

@@ -1,4 +1,4 @@
-# main.py
+# backend/main.py
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
@@ -7,41 +7,40 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.database import create_tables
-from app.api.voice import router as voice_router, init_voice_services
-from app.api.auth import router as auth_router
+from app.api.voice     import router as voice_router,     init_voice_services
+from app.api.auth      import router as auth_router
+from app.api.voice_nav import router as voice_nav_router  # ← router mới
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger("DigitalAssetVoice")
+
+create_tables()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 1. Reset DB và tạo lại tables
-    create_tables()
-
-    # 2. Khởi tạo voice services
-    logger.info("🚀 Đang khởi tạo Voice & Biometric Services...")
+    logger.info("🚀 Đang khởi tạo Voice & Biometric Services…")
     voice_config = {
         "whisper": {
-            "model_size": "vinai/PhoWhisper-small",
-            "device": "cpu",
-            "compute_type": "int8",
-            "language": "vi",
-            "vad_filter": False,
+            "model_size":    "vinai/PhoWhisper-small",
+            "device":        "cpu",
+            "compute_type":  "int8",
+            "language":      "vi",
+            "vad_filter":    False,
         }
     }
     init_voice_services(voice_config)
-    logger.info("✅ Voice & Biometric System đã sẵn sàng!")
+    logger.info("✅ Voice & Biometric System sẵn sàng!")
     yield
 
 
 app = FastAPI(
     title="Digital Asset Voice Manager",
-    description="Quản lý tài sản số bằng giọng nói với MFCC + DFT + Whisper",
-    version="1.0.0",
+    description="Quản lý tài sản số bằng giọng nói — MFCC + GE2E + Whisper",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -53,35 +52,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(voice_router, prefix="/voice", tags=["Voice"])
-app.include_router(auth_router,  prefix="/auth",  tags=["Auth"])
+# ── Routers ───────────────────────────────────────────────────────────────────
+app.include_router(auth_router,      prefix="/auth",  tags=["Auth"])
+app.include_router(voice_router,     prefix="/voice", tags=["Voice"])
+app.include_router(voice_nav_router, prefix="/voice", tags=["VoiceNav"])
+# → endpoint cuối cùng: POST /voice/command-nav
 
+
+# ── Root / Health ─────────────────────────────────────────────────────────────
 
 @app.get("/")
 async def root():
-    return {"message": "Digital Asset Voice API đang chạy!", "status": "ok", "version": "1.0.0", "docs": "/docs"}
-
+    return {"status": "ok", "version": "1.1.0", "docs": "/docs"}
 
 @app.get("/health")
 async def health():
     return {"status": "healthy", "message": "Voice Biometric API is running"}
 
 
-def _make_json_safe(obj):
+# ── Validation error handler ──────────────────────────────────────────────────
+
+def _json_safe(obj):
     if isinstance(obj, bytes):
         return obj.decode("utf-8", errors="replace")
-    elif isinstance(obj, dict):
-        return {k: _make_json_safe(v) for k, v in obj.items()}
-    elif isinstance(obj, (list, tuple)):
-        return [_make_json_safe(item) for item in obj]
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(i) for i in obj]
     return obj
 
-
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
+async def validation_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": _make_json_safe(exc.errors())},
+        content={"detail": _json_safe(exc.errors())},
     )
 
 

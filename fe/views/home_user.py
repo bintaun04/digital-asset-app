@@ -1,6 +1,5 @@
 # fe/views/home_user.py
 import customtkinter as ctk
-from tkinter import messagebox
 
 
 class HomeUserView(ctk.CTkFrame):
@@ -15,43 +14,49 @@ class HomeUserView(ctk.CTkFrame):
         super().tkraise(*args, **kwargs)
 
     def _build(self):
-        email = (
-            self.controller.current_user.get("email", "")
-            if self.controller.current_user
-            else ""
-        )
+        user  = self.controller.current_user or {}
+        email = user.get("email", "")
+        lang  = user.get("voice_language", "vi")
+        flag  = "🇻🇳" if lang == "vi" else "🇬🇧"
 
         ctk.CTkLabel(
             self, text="Trang chủ",
-            font=ctk.CTkFont(size=24, weight="bold"),
-        ).pack(pady=40)
+            font=ctk.CTkFont(size=26, weight="bold"),
+        ).pack(pady=(55, 4))
 
         ctk.CTkLabel(
             self, text=f"Chào mừng, {email}",
-            font=ctk.CTkFont(size=14),
-        ).pack(pady=5)
+            font=ctk.CTkFont(size=14), text_color="gray",
+        ).pack()
+
+        ctk.CTkLabel(
+            self,
+            text=f"{flag} {'Tiếng Việt' if lang == 'vi' else 'English'}",
+            font=ctk.CTkFont(size=12), text_color="#4a9eff",
+        ).pack(pady=(2, 36))
 
         ctk.CTkButton(
-            self, text="🎤 Xác thực giọng nói", width=280,
-            command=lambda: self.controller.show_frame("VerifyVoiceView"),
-        ).pack(pady=12)
-
-        ctk.CTkButton(
-            self, text="🔐 Xác thực Challenge Voice",
-            width=280, height=46,
+            self,
+            text="🎙️ Voice Command Center",
+            width=280, height=50,
             font=ctk.CTkFont(size=15, weight="bold"),
-            fg_color="#7B1FA2", hover_color="#9C27B0",
-            command=lambda: self.controller.show_frame("ChallengeVoiceView"),
+            fg_color="#00695c", hover_color="#00796b",
+            command=lambda: self.controller.show_frame("OutsideView"),
         ).pack(pady=8)
 
         ctk.CTkButton(
-            self, text="📊 Xem lịch sử insight giọng nói",
-            width=280, height=42,
+            self,
+            text="📊 Lịch sử Insight giọng nói",
+            width=280, height=46,
+            font=ctk.CTkFont(size=14),
             fg_color="#1565c0", hover_color="#1976d2",
             command=lambda: self.controller.show_frame("InsightView"),
         ).pack(pady=8)
 
         ctk.CTkButton(
-            self, text="Đăng xuất", width=280, fg_color="red",
+            self,
+            text="Đăng xuất",
+            width=280, height=42,
+            fg_color="#c62828", hover_color="#b71c1c",
             command=self.controller.logout,
-        ).pack(pady=14)
+        ).pack(pady=8)
