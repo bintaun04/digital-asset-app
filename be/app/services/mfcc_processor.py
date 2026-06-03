@@ -6,7 +6,7 @@ from typing import Tuple
 logger = logging.getLogger("MFCCProcessor")
 
 SAMPLE_RATE = 16_000
-N_MFCC      = 20
+N_MFCC      = 13        # ← Đã sửa từ 20 thành 13
 N_FFT       = 512
 HOP_LENGTH  = 160
 

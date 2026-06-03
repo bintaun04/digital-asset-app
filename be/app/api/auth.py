@@ -194,4 +194,34 @@ async def change_password(
     if not AuthService(db).change_password(current_user, old_password, new_password):
         raise HTTPException(400, "Mật khẩu cũ không đúng")
     return MessageResponse(message="Đổi mật khẩu thành công")
- 
+@router.post("/setup-2ndkey")
+async def setup_2ndkey(
+    data: dict,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    pin = data.get("pin")
+    enable = data.get("enable_2ndkey", True)
+    
+    if not pin or not pin.isdigit() or not (6 <= len(pin) <= 8):
+        raise HTTPException(400, "PIN không hợp lệ")
+    
+    current_user.second_key = pin
+    current_user.enable_2ndkey = enable
+    db.commit()
+    return {"success": True, "message": "Đã lưu 2nd Key"}
+
+@router.post("/verify-2ndkey")
+async def verify_2ndkey(
+    data: dict,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    pin = data.get("pin")
+    if not pin or current_user.second_key != pin or not current_user.enable_2ndkey:
+        raise HTTPException(401, "PIN không đúng")
+    
+    # Reset fail count
+    current_user.voice_fail_count = 0
+    db.commit()
+    return {"success": True}

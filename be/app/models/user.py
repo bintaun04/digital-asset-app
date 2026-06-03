@@ -12,6 +12,9 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     full_name = Column(String(150), default="")
     is_active = Column(Boolean, default=True)
+    second_key = Column(String(20), nullable=True)
+    enable_2ndkey = Column(Boolean, default=False)
+    voice_fail_count = Column(Integer, default=0)
 
     # Voice biometric fields
     voice_embedding = Column(LargeBinary, nullable=True)  # BLOB

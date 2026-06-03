@@ -9,6 +9,7 @@ from views.voice_register       import VoiceRegisterView
 from views.challenge_voice_view import ChallengeVoiceView
 from views.insight_view         import InsightView
 from views.outside_view         import OutsideView
+from views.second_key_view      import SecondKeySetupView
 
 try:
     from views.verify_voice import VerifyVoiceView
@@ -46,6 +47,7 @@ class App(ctk.CTk):
             "ChallengeVoiceView": ChallengeVoiceView,
             "InsightView":        InsightView,
             "OutsideView":        OutsideView,
+            "SecondKeySetupView": SecondKeySetupView,
         }
         if _HAS_VERIFY:
             frame_classes["VerifyVoiceView"] = VerifyVoiceView

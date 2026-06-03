@@ -18,6 +18,11 @@ CREATE TABLE users (
     voice_language      VARCHAR(2) DEFAULT 'vi',
     voice_registered_at TIMESTAMP  NULL DEFAULT NULL,
 
+    -- 2ND KEY (PIN)
+    second_key          VARCHAR(20) DEFAULT NULL,
+    enable_2ndkey       BOOLEAN     DEFAULT FALSE,
+    voice_fail_count    INT         DEFAULT 0,
+
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
@@ -30,7 +35,6 @@ CREATE TABLE voice_insights (
     user_id          INT NOT NULL,
     action_type      ENUM('enroll','verify','challenge') NOT NULL,
 
-    -- Embedding comparison
     is_match         BOOLEAN    DEFAULT FALSE,
     cosine_score     FLOAT      DEFAULT 0.0,
     mfcc_score       FLOAT      DEFAULT NULL,
@@ -42,18 +46,16 @@ CREATE TABLE voice_insights (
     mode             VARCHAR(20) DEFAULT 'MFCC+GE2E',
     confidence       VARCHAR(10) DEFAULT NULL,
 
-    -- Acoustic features (giọng gốc vs giọng vừa nói)
-    duration_sec     FLOAT      DEFAULT NULL,   -- độ dài audio (giây)
-    pitch_mean       FLOAT      DEFAULT NULL,   -- tần số cơ bản trung bình (Hz)
-    pitch_std        FLOAT      DEFAULT NULL,   -- độ lệch chuẩn pitch
-    speaking_rate    FLOAT      DEFAULT NULL,   -- tốc độ nói (syllables/giây)
-    energy_mean      FLOAT      DEFAULT NULL,   -- năng lượng trung bình (RMS)
-    energy_std       FLOAT      DEFAULT NULL,   -- độ lệch chuẩn năng lượng
-    snr_db           FLOAT      DEFAULT NULL,   -- Signal-to-Noise Ratio (dB)
-    silence_ratio    FLOAT      DEFAULT NULL,   -- tỉ lệ khoảng lặng [0-1]
-    voice_quality    VARCHAR(10) DEFAULT NULL,  -- 'good'/'fair'/'poor'
+    duration_sec     FLOAT      DEFAULT NULL,
+    pitch_mean       FLOAT      DEFAULT NULL,
+    pitch_std        FLOAT      DEFAULT NULL,
+    speaking_rate    FLOAT      DEFAULT NULL,
+    energy_mean      FLOAT      DEFAULT NULL,
+    energy_std       FLOAT      DEFAULT NULL,
+    snr_db           FLOAT      DEFAULT NULL,
+    silence_ratio    FLOAT      DEFAULT NULL,
+    voice_quality    VARCHAR(10) DEFAULT NULL,
 
-    -- Meta
     language         VARCHAR(2) DEFAULT 'vi',
     transcribed_text TEXT       DEFAULT NULL,
 

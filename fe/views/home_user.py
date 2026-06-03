@@ -35,6 +35,16 @@ class HomeUserView(ctk.CTkFrame):
             font=ctk.CTkFont(size=12), text_color="#4a9eff",
         ).pack(pady=(2, 36))
 
+        # === NÚT MỚI: SETUP 2ND KEY ===
+        ctk.CTkButton(
+            self,
+            text="🔑 Setup 2nd Key (PIN)",
+            width=280, height=48,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color="#8e24aa", hover_color="#ab47bc",
+            command=lambda: self.controller.show_frame("SecondKeySetupView"),
+        ).pack(pady=8)
+
         ctk.CTkButton(
             self,
             text="🎙️ Voice Command Center",
