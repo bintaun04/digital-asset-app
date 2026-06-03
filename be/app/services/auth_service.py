@@ -1,39 +1,29 @@
-# backend/app/services/auth_service.py
+# be/app/services/auth_service.py
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from ..models.user import User
 
 logger = logging.getLogger("AuthService")
 
 # ========================= Config =========================
-SECRET_KEY = "change-this-to-a-random-secret-key-in-production"  # Đổi sang .env khi deploy
+SECRET_KEY = "change-this-to-a-random-secret-key-in-production"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-# bcrypt giới hạn cứng 72 bytes – helper để truncate an toàn
-def _safe_encode(password: str) -> str:
-    """Truncate password về tối đa 72 bytes (giới hạn của bcrypt)."""
-    return password.encode("utf-8")[:72].decode("utf-8", errors="ignore")
 
 
 class AuthService:
     def __init__(self, db: Session):
         self.db = db
 
-    # -------- Password helpers --------
+    # -------- Password (Plain Text - Đơn giản cho đồ án) --------
 
-    def hash_password(self, password: str) -> str:
-        return pwd_context.hash(_safe_encode(password))
-
-    def verify_password(self, plain: str, hashed: str) -> bool:
-        return pwd_context.verify(_safe_encode(plain), hashed)
+    def verify_password(self, plain: str, stored_password: str) -> bool:
+        """So sánh trực tiếp password"""
+        return plain == stored_password
 
     # -------- User CRUD --------
 
@@ -46,7 +36,7 @@ class AuthService:
     def create_user(self, email: str, password: str, full_name: str = "") -> User:
         user = User(
             email=email,
-            hashed_password=self.hash_password(password),
+            hashed_password=password,        # Lưu trực tiếp password (plain text)
             full_name=full_name,
         )
         self.db.add(user)
@@ -60,17 +50,20 @@ class AuthService:
     def authenticate(self, email: str, password: str) -> Optional[User]:
         user = self.get_user_by_email(email)
         if not user:
-            logger.warning(f"⚠️  Không tìm thấy user: {email}")
+            logger.warning(f"⚠️ Không tìm thấy user: {email}")
             return None
+        
         if not self.verify_password(password, user.hashed_password):
-            logger.warning(f"⚠️  Sai mật khẩu cho user: {email}")
+            logger.warning(f"⚠️ Sai mật khẩu cho user: {email}")
             return None
+        
         return user
 
     def change_password(self, user: User, old_password: str, new_password: str) -> bool:
         if not self.verify_password(old_password, user.hashed_password):
             return False
-        user.hashed_password = self.hash_password(new_password)
+        
+        user.hashed_password = new_password   # Lưu trực tiếp
         self.db.commit()
         logger.info(f"🔑 User {user.email} đã đổi mật khẩu")
         return True
