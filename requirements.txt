@@ -5,9 +5,7 @@ pydantic==2.5.2
 pydantic-settings==2.1.0
 mysql-connector-python==8.2.0
 SQLAlchemy==2.0.23
-faiss-cpu==1.13.2
 numpy==2.2.0
-librosa
 torch
 scipy==1.14.1
 python-dotenv==1.0.0
@@ -19,7 +17,6 @@ faster-whisper
 fastapi
 uvicorn[standard]
 python-multipart
-pydantic-settings
 customtkinter          # Giao diện hiện đại, đẹp hơn Tkinter mặc định (rất khuyến khích dùng)
 requests               # Gọi API FastAPI
 Pillow                 # Xử lý ảnh (logo, icons)
@@ -34,10 +31,8 @@ passlib[bcrypt]==1.7.4              # Hash password
 python-multipart==0.0.9             # Form data (đã có thể có rồi)
  
 # Database
-sqlalchemy==2.0.30
 pymysql==1.1.1                      # MySQL driver
 cryptography==42.0.5                # Cần cho pymysql SSL
  
 # Settings
-pydantic-settings==2.2.1            # Đọc .env (đã dùng trong config.py)
 resemblyzer
