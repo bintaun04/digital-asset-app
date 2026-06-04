@@ -7,8 +7,8 @@ import tempfile
 import os
 import numpy as np
 import time
-import requests   # ← QUAN TRỌNG: Phải có dòng này
-
+import requests
+import pygame
 
 class ChallengeVoiceView(ctk.CTkFrame):
     def __init__(self, parent, controller):
@@ -19,6 +19,7 @@ class ChallengeVoiceView(ctk.CTkFrame):
         self.user_language = "vi"
         self.fail_count = 0
 
+        pygame.mixer.init()
         # Recording vars
         self.is_recording = False
         self.recording_frames = []
@@ -29,7 +30,7 @@ class ChallengeVoiceView(ctk.CTkFrame):
         self._build_ui()
 
     def _build_ui(self):
-        ctk.CTkLabel(self, text="🔐 Xác thực Bước 2", 
+        ctk.CTkLabel(self, text=" Xác thực Bước 2", 
                     font=ctk.CTkFont(size=26, weight="bold")).pack(pady=20)
 
         self.lang_label = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=13, weight="bold"))
@@ -40,12 +41,12 @@ class ChallengeVoiceView(ctk.CTkFrame):
         self.challenge_box = ctk.CTkTextbox(self, height=100, wrap="word", font=ctk.CTkFont(size=14))
         self.challenge_box.pack(pady=8, padx=30, fill="x")
 
-        self.btn_get = ctk.CTkButton(self, text="📝 Lấy Challenge Mới", height=45, width=320,
+        self.btn_get = ctk.CTkButton(self, text=" Lấy Challenge Mới", height=45, width=320,
                                    command=self.get_challenge)
         self.btn_get.pack(pady=12)
 
         # Toggle Record Button
-        self.btn_record = ctk.CTkButton(self, text="🎤 Bắt đầu ghi âm", height=50, width=320,
+        self.btn_record = ctk.CTkButton(self, text=" Bắt đầu ghi âm", height=50, width=320,
                                       fg_color="#d32f2f", command=self.toggle_recording)
         self.btn_record.pack(pady=8)
 
@@ -55,16 +56,19 @@ class ChallengeVoiceView(ctk.CTkFrame):
 
         self.wave_canvas = ctk.CTkCanvas(self, height=60, width=300, bg="#1a1a2e", highlightthickness=0)
         self.wave_canvas.pack(pady=5)
+        #replay button
+        self.btn_play = ctk.CTkButton(self, text=" Nghe lại ghi âm", height=40, width=320,
+                                    fg_color="#1976d2", state="disabled", command=self.play_audio)
+        self.btn_play.pack(pady=5)
 
         self.btn_verify = ctk.CTkButton(self, text="✅ Xác thực Voice", height=50, width=320,
                                       fg_color="green", state="disabled", command=self.verify)
         self.btn_verify.pack(pady=10)
-
         # 2ND KEY SECTION
         ctk.CTkLabel(self, text="─ Hoặc dùng Khóa phụ ─", text_color="gray", font=ctk.CTkFont(size=12)).pack(pady=10)
         self.pin_entry = ctk.CTkEntry(self, placeholder_text="Nhập PIN 6-8 số", width=320, show="*")
         self.pin_entry.pack(pady=5)
-        self.btn_pin_verify = ctk.CTkButton(self, text="🔑 Xác thực bằng 2nd Key", height=45, width=320,
+        self.btn_pin_verify = ctk.CTkButton(self, text=" Xác thực bằng 2nd Key", height=45, width=320,
                                            fg_color="#8e24aa", command=self.verify_2ndkey)
         self.btn_pin_verify.pack(pady=8)
 
@@ -74,7 +78,6 @@ class ChallengeVoiceView(ctk.CTkFrame):
         ctk.CTkButton(self, text="← Huỷ & Quay lại", fg_color="gray", width=320,
                      command=self._cancel).pack(pady=10)
 
-    # ==================== GHI ÂM TOGGLE ====================
     def toggle_recording(self):
         if self.is_recording:
             self.stop_recording()
@@ -100,7 +103,15 @@ class ChallengeVoiceView(ctk.CTkFrame):
         except Exception as e:
             messagebox.showerror("Lỗi", str(e))
             self._reset_recording_ui()
-
+    def play_audio(self):
+        if not self.file_path or not os.path.exists(self.file_path):
+            messagebox.showwarning("Lỗi", "Không tìm thấy file ghi âm!")
+            return
+        try:
+            pygame.mixer.music.load(self.file_path)
+            pygame.mixer.music.play()
+        except Exception as e:
+            messagebox.showerror("Lỗi phát âm thanh", str(e))
     def stop_recording(self):
         if self.stream:
             self.stream.stop()
@@ -111,8 +122,9 @@ class ChallengeVoiceView(ctk.CTkFrame):
             recording = np.concatenate(self.recording_frames, axis=0)
             self.file_path = tempfile.mktemp(suffix=".wav")
             write(self.file_path, 16000, recording)
-            self.status_label.configure(text="✔ Ghi âm xong!", text_color="green")
+            self.status_label.configure(text=" Ghi âm xong!", text_color="green")
             self.btn_verify.configure(state="normal")
+            self.btn_play.configure(state="normal")
         else:
             self.status_label.configure(text="Không có dữ liệu", text_color="red")
 
@@ -138,11 +150,10 @@ class ChallengeVoiceView(ctk.CTkFrame):
         self.is_recording = False
         if hasattr(self, 'timer_id') and self.timer_id:
             self.after_cancel(self.timer_id)
-        self.btn_record.configure(text="🎤 Bắt đầu ghi âm", fg_color="#d32f2f")
+        self.btn_record.configure(text=" Bắt đầu ghi âm", fg_color="#d32f2f")
         self.timer_label.configure(text="00:00")
         self.wave_canvas.delete("all")
 
-    # ==================== CÁC HÀM CÒN LẠI (GIỮ NGUYÊN) ====================
     def tkraise(self, *args, **kwargs):
         if self.controller.current_user:
             self.user_language = self.controller.current_user.get("voice_language", "vi")
@@ -159,12 +170,14 @@ class ChallengeVoiceView(ctk.CTkFrame):
         self.challenge_box.insert("1.0", "Nhấn 'Lấy Challenge Mới' để bắt đầu...")
         self.btn_record.configure(state="normal")
         self.btn_verify.configure(state="disabled")
+        self.btn_play.configure(state="disabled")
         self.pin_entry.delete(0, "end")
         self.status_label.configure(text="")
         self._reset_recording_ui()
 
     def _cancel(self):
         self._reset_recording_ui()
+        pygame.mixer.music.stop()
         self.controller.current_user = None
         self.controller.token = None
         self.controller.show_frame("LoginView")
@@ -182,7 +195,7 @@ class ChallengeVoiceView(ctk.CTkFrame):
             self.challenge_id = data["challenge_id"]
             self.challenge_box.delete("1.0", "end")
             self.challenge_box.insert("1.0", data["challenge_text"])
-            self.status_label.configure(text="✅ Challenge sẵn sàng!", text_color="green")
+            self.status_label.configure(text=" Challenge sẵn sàng!", text_color="green")
             self.btn_record.configure(state="normal")
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không lấy được challenge:\n{str(e)}")
@@ -211,11 +224,11 @@ class ChallengeVoiceView(ctk.CTkFrame):
                 )
             result = resp.json()
             if result.get("success"):
-                messagebox.showinfo("Thành công", f"✅ Đăng nhập thành công!\nScore: {result.get('score', 0):.4f}")
+                messagebox.showinfo("Thành công", f" Đăng nhập thành công!\nScore: {result.get('score', 0):.4f}")
                 self.controller.login_success(self.controller.current_user, self.controller.token)
             else:
                 self.fail_count += 1
-                self.status_label.configure(text=f"❌ Thất bại lần {self.fail_count}/3", text_color="red")
+                self.status_label.configure(text=f" Thất bại lần {self.fail_count}/3", text_color="red")
                 if self.fail_count >= 3:
                     messagebox.showwarning("Cảnh báo", "Đã thất bại 3 lần. Vui lòng dùng 2nd Key!")
                 else:
@@ -223,7 +236,7 @@ class ChallengeVoiceView(ctk.CTkFrame):
         except Exception as e:
             messagebox.showerror("Lỗi", str(e))
         finally:
-            self.btn_verify.configure(state="normal", text="✅ Xác thực Voice")
+            self.btn_verify.configure(state="normal", text=" Xác thực Voice")
             self._cleanup_audio()
 
     def verify_2ndkey(self):
@@ -240,7 +253,7 @@ class ChallengeVoiceView(ctk.CTkFrame):
             )
             result = resp.json()
             if result.get("success"):
-                messagebox.showinfo("Thành công", "✅ Xác thực 2nd Key thành công!")
+                messagebox.showinfo("Thành công", " Xác thực 2nd Key thành công!")
                 self.controller.login_success(self.controller.current_user, self.controller.token)
             else:
                 messagebox.showerror("Thất bại", "PIN không đúng")

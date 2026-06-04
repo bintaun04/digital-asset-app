@@ -58,7 +58,7 @@ class AuthService:
         if not pin.isdigit() or not (6 <= len(pin) <= 8):
             return False
         
-        user.hashed_password = new_password   # Lưu trực tiếp
+        user.hashed_password = new_password
         self.db.commit()
         logger.info(f"✅ 2nd Key đã được thiết lập cho user {user.email}")
         return True

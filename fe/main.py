@@ -58,7 +58,6 @@ class App(ctk.CTk):
                 frame = FrameClass(self.container, self)
                 self.frames[name] = frame
                 frame.grid(row=0, column=0, sticky="nsew")
-                print(f"✅ Frame: {name}")
             except Exception as e:
                 print(f"❌ Frame FAILED '{name}': {e}")
 
@@ -73,7 +72,6 @@ class App(ctk.CTk):
             print(f"[WARN] Không tìm thấy frame: {name}")
             return
 
-        # Dừng mic ở frame cũ nếu là OutsideView
         old = self.frames.get(self._current_frame_name)
         if old and hasattr(old, "on_hide"):
             old.on_hide()
@@ -87,7 +85,6 @@ class App(ctk.CTk):
         self.show_frame("HomeUserView")
 
     def logout(self):
-        # Dừng mic nếu đang ở OutsideView
         ov = self.frames.get("OutsideView")
         if ov and hasattr(ov, "_stop_mic"):
             ov._stop_mic()

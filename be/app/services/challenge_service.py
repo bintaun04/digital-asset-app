@@ -11,12 +11,12 @@ logger = logging.getLogger("ChallengeService")
 
 class ChallengeService:
     CHALLENGES = [
-        "Xin chào, tôi là chủ tài khoản này.",
+        "Xin chào.",
         "Hôm nay tôi muốn truy cập vào tài sản số của mình.",
         "Đây là giọng nói thật của tôi.",
         "Xác thực an toàn để mở khóa ví.",
         "Tôi xác nhận danh tính bằng giọng nói.",
-        "Mở khóa tài sản digital asset ngay bây giờ.",
+        "Tạm biệt. ",
         "Giọng nói này thuộc về tôi."
     ]
 
