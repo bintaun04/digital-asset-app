@@ -27,7 +27,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Digital Asset App - Voice Biometric")
-        self.geometry("500x680")
+        self.geometry("500x800")
         self.resizable(False, False)
 
         self.current_user = None

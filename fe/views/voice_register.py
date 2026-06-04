@@ -1,10 +1,12 @@
+# fe/views/voice_register.py
 import customtkinter as ctk
 import sounddevice as sd
 from scipy.io.wavfile import write
 from tkinter import messagebox
 import tempfile
 import os
-import numpy as np 
+import numpy as np
+import time
 from services.voice_api import enroll_voice
 
 
@@ -15,20 +17,23 @@ class VoiceRegisterView(ctk.CTkFrame):
         self.file_path = None
         self.selected_language = "vi"  
 
-        # Title
-        ctk.CTkLabel(
-            self, 
-            text="Đăng ký giọng nói",
-            font=ctk.CTkFont(size=24, weight="bold")
-        ).pack(pady=25)
+        # === THÊM MỚI ===
+        self.is_recording = False
+        self.recording_frames = []
+        self.stream = None
+        self.start_time = None
+        self.timer_id = None
+
+        self._build_ui()
+
+    def _build_ui(self):
+        ctk.CTkLabel(self, text="Đăng ký giọng nói",
+                    font=ctk.CTkFont(size=24, weight="bold")).pack(pady=25)
         
-        ctk.CTkLabel(
-            self,
+        ctk.CTkLabel(self,
             text="Đây là bước bảo mật bắt buộc.\n"
                  "Giọng nói sẽ được dùng để xác thực khi đăng nhập.",
-            font=ctk.CTkFont(size=12), 
-            text_color="gray",
-        ).pack(pady=(0, 15))
+            font=ctk.CTkFont(size=12), text_color="gray").pack(pady=(0, 15))
 
         # ── Language Selection Frame ──────────────────────────────────────────
         lang_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -40,7 +45,6 @@ class VoiceRegisterView(ctk.CTkFrame):
             font=ctk.CTkFont(size=13, weight="bold")
         ).pack(side="left", padx=10)
 
-        # Radio buttons cho ngôn ngữ
         self.lang_var = ctk.StringVar(value="vi")
         
         radio_vi = ctk.CTkRadioButton(
@@ -63,7 +67,6 @@ class VoiceRegisterView(ctk.CTkFrame):
         )
         radio_en.pack(side="left", padx=10)
 
-        # Language info label
         self.lang_info = ctk.CTkLabel(
             self,
             text="Sử dụng model: PhoWhisper (Tiếng Việt)",
@@ -72,24 +75,27 @@ class VoiceRegisterView(ctk.CTkFrame):
         )
         self.lang_info.pack(pady=5)
 
-        # ── Record Button ─────────────────────────────────────────────────────
+        # === NÚT GHI ÂM TOGGLE ===
         self.btn_record = ctk.CTkButton(
             self, 
-            text="🎤 Bắt đầu ghi âm (5 giây)",
+            text="🎤 Bắt đầu ghi âm",
             width=300, 
             height=45, 
-            command=self.start_record,
+            fg_color="#d32f2f",
+            command=self.toggle_recording
         )
         self.btn_record.pack(pady=15)
 
-        self.status_label = ctk.CTkLabel(
-            self, 
-            text="", 
-            font=ctk.CTkFont(size=13)
-        )
+        # === Timer + Waveform ===
+        self.timer_label = ctk.CTkLabel(self, text="00:00", font=ctk.CTkFont(size=16, weight="bold"))
+        self.timer_label.pack(pady=2)
+
+        self.wave_canvas = ctk.CTkCanvas(self, height=60, width=300, bg="#1a1a2e", highlightthickness=0)
+        self.wave_canvas.pack(pady=8)
+
+        self.status_label = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=13))
         self.status_label.pack(pady=8)
 
-        # ── Enroll Button ─────────────────────────────────────────────────────
         self.btn_enroll = ctk.CTkButton(
             self, 
             text="✅ Lưu giọng nói",
@@ -101,7 +107,6 @@ class VoiceRegisterView(ctk.CTkFrame):
         )
         self.btn_enroll.pack(pady=10)
 
-        # ── Skip Button ───────────────────────────────────────────────────────
         ctk.CTkButton(
             self, 
             text="Bỏ qua (không khuyến khích)", 
@@ -110,8 +115,77 @@ class VoiceRegisterView(ctk.CTkFrame):
             command=self._skip,
         ).pack(pady=10)
 
+    # ==================== GHI ÂM TOGGLE ====================
+    def toggle_recording(self):
+        if self.is_recording:
+            self.stop_recording()
+        else:
+            self.start_recording()
+
+    def start_recording(self):
+        try:
+            self.is_recording = True
+            self.recording_frames = []
+            self.start_time = time.time()
+            self.btn_record.configure(text="⏹️ Dừng ghi âm", fg_color="#c62828")
+            self.status_label.configure(text="🔴 Đang ghi âm...", text_color="orange")
+            self.update()
+
+            def callback(indata, frames, time_info, status):
+                if status: print(status)
+                self.recording_frames.append(indata.copy())
+
+            self.stream = sd.InputStream(samplerate=16000, channels=1, dtype='int16', callback=callback)
+            self.stream.start()
+            self._update_timer_and_wave()
+        except Exception as e:
+            messagebox.showerror("Lỗi ghi âm", str(e))
+            self._reset_recording_ui()
+
+    def stop_recording(self):
+        if self.stream:
+            self.stream.stop()
+            self.stream.close()
+            self.stream = None
+
+        if self.recording_frames:
+            recording = np.concatenate(self.recording_frames, axis=0)
+            self.file_path = tempfile.mktemp(suffix=".wav")
+            write(self.file_path, 16000, recording)
+
+            self.status_label.configure(text="✔ Ghi âm hoàn tất – nhấn Lưu để tiếp tục", text_color="green")
+            self.btn_enroll.configure(state="normal")
+        else:
+            self.status_label.configure(text="Không có dữ liệu ghi âm", text_color="red")
+
+        self._reset_recording_ui()
+
+    def _update_timer_and_wave(self):
+        if not self.is_recording:
+            return
+        elapsed = int(time.time() - self.start_time)
+        self.timer_label.configure(text=f"{elapsed//60:02d}:{elapsed%60:02d}")
+
+        self.wave_canvas.delete("all")
+        if self.recording_frames:
+            data = self.recording_frames[-1].flatten()[:300]
+            for i, val in enumerate(data[::3]):
+                height = int(abs(val) / 400)
+                x = i * 3
+                self.wave_canvas.create_line(x, 30-height, x, 30+height, fill="#00ff88", width=2)
+
+        self.timer_id = self.after(50, self._update_timer_and_wave)
+
+    def _reset_recording_ui(self):
+        self.is_recording = False
+        if self.timer_id:
+            self.after_cancel(self.timer_id)
+        self.btn_record.configure(text="🎤 Bắt đầu ghi âm", fg_color="#d32f2f")
+        self.timer_label.configure(text="00:00")
+        self.wave_canvas.delete("all")
+
+    # ==================== GIỮ NGUYÊN PHẦN CÒN LẠI ====================
     def _on_language_change(self):
-        """Callback khi thay đổi ngôn ngữ"""
         self.selected_language = self.lang_var.get()
         
         if self.selected_language == "vi":
@@ -123,7 +197,6 @@ class VoiceRegisterView(ctk.CTkFrame):
         
         self.lang_info.configure(text=model_info)
         
-        # Reset trạng thái khi đổi ngôn ngữ
         if self.file_path:
             self._cleanup_audio()
             self.btn_enroll.configure(state="disabled")
@@ -133,57 +206,15 @@ class VoiceRegisterView(ctk.CTkFrame):
             )
 
     def tkraise(self, *args, **kwargs):
-        """Reset trạng thái mỗi khi frame được hiển thị lại."""
         self._cleanup_audio()
-        self.lang_var.set("vi")  # Reset về tiếng Việt
+        self.lang_var.set("vi")
         self.selected_language = "vi"
-        self._on_language_change()  # Cập nhật UI
+        self._on_language_change()
         self.btn_enroll.configure(state="disabled", text="✅ Lưu giọng nói")
         self.status_label.configure(text="")
+        self._reset_recording_ui()      # ← Reset waveform khi vào lại
         super().tkraise(*args, **kwargs)
 
-    # ── Ghi âm ────────────────────────────────────────────────────────────────
-    def start_record(self):
-        try:
-            # Hiển thị hướng dẫn theo ngôn ngữ
-            if self.selected_language == "vi":
-                recording_msg = "🔴 Đang ghi âm... Hãy nói rõ ràng bằng tiếng Việt"
-                complete_msg = "✔ Ghi âm hoàn tất – nhấn Lưu để tiếp tục"
-            else:
-                recording_msg = "🔴 Recording... Please speak clearly in English"
-                complete_msg = "✔ Recording completed – click Save to continue"
-
-            self.status_label.configure(
-                text=recording_msg,
-                text_color="orange"
-            )
-            self.btn_record.configure(state="disabled")
-            self.btn_enroll.configure(state="disabled")
-            self.update()
-
-            fs = 16000
-            recording = sd.rec(int(5 * fs), samplerate=fs, channels=1, dtype="int16")
-            sd.wait()
-
-            self._cleanup_audio()
-            self.file_path = tempfile.mktemp(suffix=".wav")
-            write(self.file_path, fs, recording)
-
-            self.status_label.configure(
-                text=complete_msg,
-                text_color="green"
-            )
-            self.btn_enroll.configure(state="normal")
-
-        except Exception as e:
-            error_msg = "Lỗi ghi âm" if self.selected_language == "vi" else "Recording error"
-            messagebox.showerror(error_msg, str(e))
-            fail_msg = "Ghi âm thất bại" if self.selected_language == "vi" else "Recording failed"
-            self.status_label.configure(text=fail_msg, text_color="red")
-        finally:
-            self.btn_record.configure(state="normal")
-
-    # ── Enroll ────────────────────────────────────────────────────────────────
     def enroll(self):
         if not self.file_path:
             warning_msg = "Vui lòng ghi âm trước!" if self.selected_language == "vi" else "Please record first!"
@@ -207,11 +238,9 @@ class VoiceRegisterView(ctk.CTkFrame):
         self.update()
 
         try:
-            # ✅ GỬI LANGUAGE ĐẾN BACKEND
             enroll_voice(user_id, self.file_path, token, language=self.selected_language)
             self._cleanup_audio()
 
-            # ✅ Cập nhật has_voice + language trong controller
             if self.controller.current_user:
                 self.controller.current_user["has_voice"] = True
                 self.controller.current_user["voice_language"] = self.selected_language
@@ -248,7 +277,6 @@ class VoiceRegisterView(ctk.CTkFrame):
             self.btn_enroll.configure(state="normal", text=save_text)
 
     def _skip(self):
-        """Cho phép bỏ qua enroll (vào HomeUser với has_voice=False)."""
         if self.selected_language == "vi":
             skip_msg = (
                 "Bạn chưa đăng ký giọng nói.\n"

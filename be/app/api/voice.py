@@ -316,8 +316,9 @@ async def verify_challenge(
     language:     str = Form("vi"),
     file:         UploadFile = File(...),
 ):
-    """Xác thực với Challenge (anti-replay)."""
-    _check_services((biometric_service, "BiometricService"))
+    """Xác thực Challenge Voice"""
+    if not biometric_service:
+        raise HTTPException(500, "BiometricService chưa được khởi tạo")
 
     audio_bytes = await file.read()
     if len(audio_bytes) < 1024:

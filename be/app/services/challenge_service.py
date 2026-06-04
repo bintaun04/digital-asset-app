@@ -3,7 +3,7 @@ import random
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 import logging
-
+import requests
 from ..repository.challenge_repo import ChallengeRepository
 
 logger = logging.getLogger("ChallengeService")
